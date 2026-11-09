@@ -31,6 +31,7 @@ class ServoSpec:
     torque_on: int = 1
     torque_off: int = 2
     speed_unit: str = "step"
+    acceleration: int | None = None
     model_number: int | None = None
 
     def __post_init__(self) -> None:
@@ -46,6 +47,8 @@ class ServoSpec:
             raise ValueError(f"speed_unit must be one of {sorted(SPEED_UNITS)}")
         if self.torque_on == self.torque_off:
             raise ValueError("torque_on and torque_off must differ")
+        if self.acceleration is not None and not (0 <= self.acceleration <= 254):
+            raise ValueError("acceleration must be None or in 0..254")
 
     @property
     def tick_min(self) -> int:

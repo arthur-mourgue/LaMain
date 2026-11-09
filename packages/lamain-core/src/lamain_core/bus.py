@@ -172,6 +172,10 @@ class RustypotBus:
         self._write_reg(servo_id, "goal_position", int(ticks))
 
     def set_goal_speed(self, servo_id: int, speed: float) -> None:
+        # On the STS3036 firmware, acceleration 0 leaves the servo motionless
+        # (verified on the bench): write the model ramp before the speed.
+        if self.servo.acceleration is not None:
+            self._write_reg(servo_id, "acceleration", self.servo.acceleration)
         if self.servo.speed_unit == "steps_per_s":
             # STS goal_speed is a signed 16-bit value in steps/s.
             self._write_reg(servo_id, "goal_speed", int(round(speed)))

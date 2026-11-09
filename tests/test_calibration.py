@@ -15,6 +15,7 @@ def test_model_loads_all_joints():
     assert m.servo.resolution == 4096
     assert m.servo.range_deg == 360.0
     assert m.servo.controller == "Sts3215PyController"
+    assert m.servo.acceleration == 50
     assert all(j.assembly_position == m.servo.mid_tick for j in m.joints.values())
     assert m.calibration_order == (
         "index_flex",

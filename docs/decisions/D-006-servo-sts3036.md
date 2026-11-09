@@ -37,6 +37,9 @@ restored from the archive can still be used with `--model`.
   must be validated on the bench before being raised.
 - Speeds are expressed in the model's unit: `steps_per_s` on the STS3036
   (`move_speed: 500`, about 44°/s) and the old SCS speed step on SCS0009.
+- The STS3036 `acceleration` register is written before each speed
+  (`acceleration: 50`): on this firmware, 0 leaves the servo motionless even
+  with torque enabled and a reachable goal (verified on the bench).
 - The bus selects `Sts3215PyController` or `Scs0009PyController` from the
   model; no call site hard-codes a servo family.
 

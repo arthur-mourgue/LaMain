@@ -39,6 +39,7 @@ _SERVO_DEFAULTS: dict[str, dict[str, object]] = {
         "torque_on": 1,
         "torque_off": 0,
         "speed_unit": "steps_per_s",
+        "acceleration": 50,
         "model_number": 521,
     },
     "STS3215": {
@@ -49,6 +50,7 @@ _SERVO_DEFAULTS: dict[str, dict[str, object]] = {
         "torque_on": 1,
         "torque_off": 0,
         "speed_unit": "steps_per_s",
+        "acceleration": 50,
         "model_number": 777,
     },
 }
@@ -113,6 +115,7 @@ def _servo_from_bus(bus_raw: dict) -> ServoSpec:
             raise ValueError(
                 f"bus.servo.{key} is required for servo_model {name!r}"
             )
+    acceleration = raw.get("acceleration")
     model_number = raw.get("model_number")
     return ServoSpec(
         model=str(raw["model"]),
@@ -123,6 +126,7 @@ def _servo_from_bus(bus_raw: dict) -> ServoSpec:
         torque_on=int(raw.get("torque_on", 1)),
         torque_off=int(raw.get("torque_off", 2)),
         speed_unit=str(raw.get("speed_unit", "step")),
+        acceleration=None if acceleration is None else int(acceleration),
         model_number=None if model_number is None else int(model_number),
     )
 
