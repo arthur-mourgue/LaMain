@@ -1,4 +1,12 @@
-from lamain_core.bus import FakeBus, FakeServo
+from lamain_core.bus import FakeBus, FakeServo, move_to
+
+
+def test_move_to_ramps_a_large_jump():
+    # The STS3036 ignores a direct goal jump > ~1000 ticks; move_to must step.
+    s = FakeServo(1, stop_min=0, stop_max=1023, position=0, goal=0, speed_ticks=50)
+    bus = FakeBus([s])
+    assert move_to(bus, 1, 1000, max_step=100, timeout_s=5.0)
+    assert bus.read_position(1) == 1000
 
 
 def test_servo_moves_and_clamps_at_stop():

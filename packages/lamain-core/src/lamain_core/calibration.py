@@ -27,7 +27,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from . import units
-from .bus import ServoBus
+from .bus import ServoBus, move_to
 from .model import HandModel, JointModel
 
 
@@ -115,15 +115,13 @@ def _sleep(bus: ServoBus, model: HandModel) -> None:
 def _move_to(bus: ServoBus, model: HandModel, servo_id: int, target: int) -> bool:
     """Move to `target`; return True if reached (within 1 tick)."""
     target = max(model.servo.tick_min, min(model.servo.tick_max, target))
-    # 600 * 20 ms = 12 s, enough for a full STS travel at the model speed.
-    for _ in range(600):
-        if abs(bus.read_position(servo_id) - target) <= 1:
-            return True
-        bus.write_goal(servo_id, target)
-        _settle(bus)
-        if not bus.simulated:
-            time.sleep(0.02)
-    return False
+    return move_to(
+        bus,
+        servo_id,
+        target,
+        max_step=max(50, model.servo.resolution // 12),
+        timeout_s=12.0,
+    )
 
 
 def _read(

@@ -40,6 +40,10 @@ restored from the archive can still be used with `--model`.
 - The STS3036 `acceleration` register is written before each speed
   (`acceleration: 50`): on this firmware, 0 leaves the servo motionless even
   with torque enabled and a reachable goal (verified on the bench).
+- The firmware also ignores a direct goal jump larger than about 1000 ticks
+  (one quarter turn). All moves are therefore ramped by `bus.move_to`, at most
+  `resolution / 12` ticks per step (341 ticks on the STS3036); calibration,
+  diagnostics, `assemble` and the home sequence use it.
 - The bus selects `Sts3215PyController` or `Scs0009PyController` from the
   model; no call site hard-codes a servo family.
 

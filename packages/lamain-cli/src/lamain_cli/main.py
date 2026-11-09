@@ -32,6 +32,7 @@ from lamain_core.bus import (
     _scalar,
     change_servo_id,
     make_controller,
+    move_to,
 )
 from lamain_core.calibration import CalibrationAbort, calibrate_hand
 from lamain_core.controller import HandController, load_calibration
@@ -109,26 +110,23 @@ def _new_run_dir(kind: str, label: str | None = None, base=None) -> Path:
 
 def _home_all(bus, model, timeout: float | None = None) -> None:
     """Bring every joint back to its initial mount zero before any operation."""
-    tol = _settle_tolerance(model)
+    max_step = max(50, model.servo.resolution // 12)
+    deadline = timeout if timeout is not None else _move_timeout(model)
     for j in model.joints.values():
         bus.set_torque_limit_pct(j.servo_id, model.safety.default_torque_pct)
         bus.set_goal_speed(j.servo_id, model.safety.move_speed)
-        # Goal first, torque second: never let a stale goal move the hand.
-        bus.write_goal(j.servo_id, j.assembly_position)
+        # Hold the current pose first, then ramp to the assembly zero: the
+        # STS3036 ignores a direct goal jump of more than ~1000 ticks.
+        bus.write_goal(j.servo_id, bus.read_position(j.servo_id))
         bus.set_torque_enable(j.servo_id, True)
-    elapsed = 0.0
-    deadline = timeout if timeout is not None else _move_timeout(model)
-    while elapsed < deadline:
-        bus.step()
-        pos = {j.servo_id: bus.read_position(j.servo_id) for j in model.joints.values()}
-        if all(
-            abs(pos[j.servo_id] - j.assembly_position) <= tol
-            for j in model.joints.values()
-        ):
-            return
-        if not bus.simulated:
-            time.sleep(0.1)
-        elapsed += 0.1
+    for j in model.joints.values():
+        move_to(
+            bus,
+            j.servo_id,
+            j.assembly_position,
+            max_step=max_step,
+            timeout_s=deadline,
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -223,13 +221,14 @@ def cmd_assemble(args) -> int:
             print(f"  ID {j.servo_id} ({name}): {bus.read_position(j.servo_id)} ticks")
 
         print("\nMoving to the assembly pose:")
+        max_step = max(50, model.servo.resolution // 12)
+        deadline = _move_timeout(model)
         for name in model.calibration_order:
             j = model.joint(name)
             bus.set_torque_limit_pct(j.servo_id, model.safety.default_torque_pct)
             bus.set_goal_speed(j.servo_id, model.safety.move_speed)
-            # Goal first, torque second: safe even if the servo's previous goal
-            # was left at 0.
-            bus.write_goal(j.servo_id, j.assembly_position)
+            # Hold the current pose first; the ramp below does the real move.
+            bus.write_goal(j.servo_id, bus.read_position(j.servo_id))
             bus.set_torque_enable(j.servo_id, True)
             hint = (
                 "horn up (full extension / dead center)"
@@ -238,23 +237,20 @@ def cmd_assemble(args) -> int:
             )
             print(f"  ID {j.servo_id} ({name}) -> {j.assembly_position} ticks: {hint}")
 
-        # wait for the servos to reach the target (or not)
+        for name in model.calibration_order:
+            j = model.joint(name)
+            move_to(
+                bus,
+                j.servo_id,
+                j.assembly_position,
+                max_step=max_step,
+                timeout_s=deadline,
+            )
+
         tol = _settle_tolerance(model)
-        elapsed = 0.0
-        deadline = _move_timeout(model)
-        reached = {}
-        while elapsed < deadline:
-            reached = {
-                j.servo_id: bus.read_position(j.servo_id) for j in model.joints.values()
-            }
-            if all(
-                abs(reached[j.servo_id] - j.assembly_position) <= tol
-                for j in model.joints.values()
-            ):
-                break
-            if not bus.simulated:
-                time.sleep(0.1)
-            elapsed += 0.1
+        reached = {
+            j.servo_id: bus.read_position(j.servo_id) for j in model.joints.values()
+        }
 
         print("\nPositions AFTER:")
         for name in model.calibration_order:

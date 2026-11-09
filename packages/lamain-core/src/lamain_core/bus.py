@@ -9,6 +9,7 @@ the bus itself contains no family-specific constant.
 from __future__ import annotations
 
 import random
+import time
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -356,3 +357,34 @@ class FakeBus:
 
     def close(self) -> None:
         return None
+
+
+# --------------------------------------------------------------------------- #
+# Ramped move (shared by calibration, diagnostics and the CLI)
+# --------------------------------------------------------------------------- #
+def move_to(
+    bus: ServoBus,
+    servo_id: int,
+    target: int,
+    max_step: int,
+    timeout_s: float,
+    settle_s: float = 0.02,
+) -> bool:
+    """Step the goal towards `target`; return True when reached.
+
+    The STS3036 ignores a direct goal jump larger than about 1000 ticks (the
+    servo simply does not move). Every caller must therefore ramp the goal in
+    `max_step` increments instead of writing the final position once.
+    """
+    deadline = time.monotonic() + timeout_s
+    max_step = max(1, int(max_step))
+    while time.monotonic() < deadline:
+        current = bus.read_position(servo_id)
+        if abs(current - target) <= 1:
+            return True
+        step = max(-max_step, min(max_step, target - current))
+        bus.write_goal(servo_id, current + step)
+        bus.step()
+        if not bus.simulated:
+            time.sleep(settle_s)
+    return False

@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import units
-from .bus import ServoBus
+from .bus import ServoBus, move_to
 from .model import HandModel, JointModel
 from .units import ServoSpec
 
@@ -110,13 +110,14 @@ def _move_to(
     bus: ServoBus, servo: ServoSpec, servo_id: int, target: int, settle_s: float
 ) -> None:
     target = max(servo.tick_min, min(servo.tick_max, target))
-    for _ in range(400):
-        if abs(bus.read_position(servo_id) - target) <= 1:
-            return
-        bus.write_goal(servo_id, target)
-        bus.step()
-        if not bus.simulated:
-            time.sleep(settle_s)
+    move_to(
+        bus,
+        servo_id,
+        target,
+        max_step=max(50, servo.resolution // 12),
+        timeout_s=8.0,
+        settle_s=settle_s,
+    )
 
 
 def _read_servo_limits(bus: ServoBus, servo_id: int) -> tuple[int | None, int | None]:
