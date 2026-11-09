@@ -38,7 +38,7 @@ def test_normalized_roundtrip():
     m, ctrl = _controller()
     applied = ctrl.set_normalized({"index_flex": 0.5})
     pos_ticks, _ = ctrl._spans_ticks("index_flex")
-    span = units.ticks_to_rad(pos_ticks)
+    span = units.ticks_to_rad(pos_ticks, m.servo)
     assert abs(applied["index_flex"] - 0.5 * span) < 1e-6
 
 
@@ -83,6 +83,46 @@ def test_refuses_invalid_calibration():
     )
     with pytest.raises(RuntimeError):
         HandController(FakeBus([]), m, bad)
+
+
+def _valid_joint(model) -> JointCalibration:
+    mid = model.servo.mid_tick
+    return JointCalibration(
+        name="index_flex",
+        servo_id=1,
+        joint_type="crank",
+        mount_ticks=mid,
+        reference_ticks=mid,
+        direction=1,
+        stop_low_ticks=mid - 200,
+        stop_high_ticks=mid + 200,
+        min_ticks=mid - 200,
+        max_ticks=mid + 200,
+        home_ticks=mid,
+    )
+
+
+def test_refuses_calibration_for_another_model():
+    m = load_hand_model(default_model_path())
+    calibration = HandCalibration(
+        hand_serial="X",
+        model_version="lamain-v1",
+        joints={"index_flex": _valid_joint(m)},
+    )
+    with pytest.raises(RuntimeError, match="made for model"):
+        HandController(FakeBus([]), m, calibration)
+
+
+def test_refuses_calibration_for_another_servo():
+    m = load_hand_model(default_model_path())
+    calibration = HandCalibration(
+        hand_serial="X",
+        model_version=m.model_version,
+        servo_model="SCS0009",
+        joints={"index_flex": _valid_joint(m)},
+    )
+    with pytest.raises(RuntimeError, match="made for servo"):
+        HandController(FakeBus([]), m, calibration)
 
 
 def test_hardware_limits_skipped_on_fake():

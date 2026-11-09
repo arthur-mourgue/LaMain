@@ -15,10 +15,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import units
-from .bus import SERVO_MAX_TICK, SERVO_MIN_TICK, ServoBus
+from .bus import ServoBus
 from .model import HandModel, JointModel
+from .units import ServoSpec
 
-SERVO_END_EPS = 20  # ticks: closer than this to 0/1023 => servo internal end
+
+def _default_endpoint_margin(servo: ServoSpec) -> int:
+    """20 ticks at SCS resolution (about 5.9 deg), scaled for the servo."""
+    return max(2, round(20 * servo.resolution / 1024))
 
 
 @dataclass
@@ -42,14 +46,17 @@ class JointDiagnosis:
     load_min: int
     temp_max: int
     voltage_min: float
+    servo: ServoSpec
     servo_min_limit: int | None = None
     servo_max_limit: int | None = None
-    endpoint_margin: int = SERVO_END_EPS
+    endpoint_margin: int = 20
     points: list[SweepPoint] = field(default_factory=list)
 
     @property
     def travel_deg(self) -> float:
-        return units.ticks_to_deg(self.stop_high - self.stop_low)
+        return units.ticks_to_deg(
+            self.stop_high - self.stop_low, self.servo
+        )
 
     @property
     def low_is_servo_end(self) -> bool:
@@ -57,7 +64,7 @@ class JointDiagnosis:
 
     @property
     def high_is_servo_end(self) -> bool:
-        return self.stop_high >= SERVO_MAX_TICK - self.endpoint_margin
+        return self.stop_high >= self.servo.tick_max - self.endpoint_margin
 
     def _matches(self, stop: int, limit: int | None) -> bool:
         return limit is not None and abs(stop - limit) <= self.endpoint_margin
@@ -99,8 +106,10 @@ class JointDiagnosis:
         }
 
 
-def _move_to(bus: ServoBus, servo_id: int, target: int, settle_s: float) -> None:
-    target = max(SERVO_MIN_TICK, min(SERVO_MAX_TICK, target))
+def _move_to(
+    bus: ServoBus, servo: ServoSpec, servo_id: int, target: int, settle_s: float
+) -> None:
+    target = max(servo.tick_min, min(servo.tick_max, target))
     for _ in range(400):
         if abs(bus.read_position(servo_id) - target) <= 1:
             return
@@ -128,21 +137,25 @@ def sweep_joint(
     step_ticks: int = 4,
     torque_pct: float | None = None,
     settle_s: float | None = None,
-    endpoint_margin: int = SERVO_END_EPS,
+    endpoint_margin: int | None = None,
 ) -> JointDiagnosis:
     sid = joint.servo_id
+    servo = model.servo
     if torque_pct is None:
-        # push at max torque so the joint really reaches its limits
+        # push at probe torque so the joint really reaches its limits
         torque_pct = model.calibration.probe_torque_pct
     if settle_s is None:
         settle_s = model.calibration.settle_s
+    if endpoint_margin is None:
+        endpoint_margin = _default_endpoint_margin(servo)
 
     bus.set_torque_limit_pct(sid, torque_pct)
     bus.set_goal_speed(sid, model.safety.move_speed)
+    bus.write_goal(sid, bus.read_position(sid))
     bus.set_torque_enable(sid, True)
 
     mount = joint.assembly_position
-    _move_to(bus, sid, mount, settle_s)
+    _move_to(bus, servo, sid, mount, settle_s)
 
     points: list[SweepPoint] = []
 
@@ -161,18 +174,18 @@ def sweep_joint(
             )
         )
 
-    # sweep down to 0, then up to 1023
+    # sweep down to the servo's low end, then up to its high end
     goal = bus.read_position(sid)
-    while goal > SERVO_MIN_TICK:
-        goal = max(SERVO_MIN_TICK, goal - step_ticks)
+    while goal > servo.tick_min:
+        goal = max(servo.tick_min, goal - step_ticks)
         bus.write_goal(sid, goal)
         record(goal)
-    while goal < SERVO_MAX_TICK:
-        goal = min(SERVO_MAX_TICK, goal + step_ticks)
+    while goal < servo.tick_max:
+        goal = min(servo.tick_max, goal + step_ticks)
         bus.write_goal(sid, goal)
         record(goal)
 
-    _move_to(bus, sid, mount, settle_s)
+    _move_to(bus, servo, sid, mount, settle_s)
     bus.set_torque_enable(sid, False)
 
     positions = [p.position for p in points] or [mount]
@@ -191,6 +204,7 @@ def sweep_joint(
         load_min=min(loads),
         temp_max=max(temps),
         voltage_min=min(volts),
+        servo=servo,
         servo_min_limit=servo_lo,
         servo_max_limit=servo_hi,
         endpoint_margin=endpoint_margin,

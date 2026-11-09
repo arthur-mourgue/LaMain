@@ -2,37 +2,52 @@
 # This file is versioned with the CAD. No "magic" value should remain in the
 # code: every calibration/speed/torque parameter comes from here.
 #
-# Units: positions in ticks (0-1023, 0.293 deg/step over 300 deg).
+# Hardware: five Feetech STS3036 servos (6 V, 360 deg, 4096 ticks -> 0.088 deg).
+# The previous SCS0009 design (1024 ticks over 300 deg) is archived at the
+# `scs0009-final` git tag. Raw positions are 0..4095; 2048 is the electrical
+# zero (the pose used to mount the horns).
+#
+# Units: positions in ticks (0-4095); angles in degrees unless suffixed.
 
-model_version: "lamain-v1"
+model_version: "lamain-v2-sts3036"
 
 bus:
   port: /dev/ttyACM0
   baudrate: 1000000
-  servo_model: SCS0009
+  servo_model: STS3036
+  servo:
+    controller: Sts3215PyController
+    resolution: 4096
+    range_deg: 360
+    torque_register: torque_limit
+    torque_on: 1
+    torque_off: 0
+    speed_unit: steps_per_s
+    model_number: 521
 
 # Calibration order: thumb last, fingers extended and spread, to avoid a false
 # stop caused by a collision.
 calibration_order: [index_flex, middle_flex, index_middle_abd, thumb_rot, thumb_flex]
 
 calibration:
-  step_ticks: 2              # slow-approach step (2 steps ~= 0.6 deg)
-  fast_step_ticks: 8         # fast-approach step (locating)
-  stable_reads: 10           # N stable reads before suspecting a stop
-  stable_epsilon_ticks: 3    # max variation allowed for "stable" (tolerate jitter)
-  overrun_ticks: 20          # the command must lead the position by this much
-  # Stop confirmation: approaching a stop, PUSH at max torque and dwell 2 s to
-  # really feel it, then head to the other direction.
-  probe_torque_pct: 100
+  # Tick values are scaled from the SCS0009 design (x4): 8 ticks ~= 0.70 deg.
+  step_ticks: 8               # slow-approach step
+  fast_step_ticks: 32         # fast-approach step (locating)
+  stable_reads: 10            # N stable reads before suspecting a stop
+  stable_epsilon_ticks: 12    # max variation allowed for "stable"
+  overrun_ticks: 80           # the command must lead the position by this much
+  # Stop confirmation: approaching a stop, PUSH at probe torque and dwell 2 s
+  # to really feel it, then head to the other direction.
+  probe_torque_pct: 60
   probe_max_s: 2.0
-  torque_pct: 60             # sweep torque
-  backoff_deg: 7             # back-off before each re-approach
-  repeat: 1                  # number of slow measurements (median)
-  settle_s: 0.02             # pause between two reads (real hardware)
-  joint_timeout_s: 60        # max time per joint before aborting
-  progress_every: 30         # print a progress line every N reads
-  servo_end_margin_ticks: 40 # stop within X ticks of 0/1023 = "servo end"
-  repeat_tolerance_ticks: 2  # beyond this => soft stop (status "uncertain")
+  torque_pct: 40              # sweep torque
+  backoff_deg: 7              # back-off before each re-approach
+  repeat: 1                   # number of slow measurements (median)
+  settle_s: 0.02              # pause between two reads (real hardware)
+  joint_timeout_s: 60         # max time per joint before aborting
+  progress_every: 30          # print a progress line every N reads
+  servo_end_margin_ticks: 160 # stop within X ticks of 0/4095 = "servo end"
+  repeat_tolerance_ticks: 8   # beyond this => soft stop (status "uncertain")
   # Logical zero q=0: "middle" = midpoint of the two stops (symmetric both ways)
   # or "mount" = assembly zero (mount pose). "middle" is more robust when the
   # horn is mounted near a stop.
@@ -47,65 +62,65 @@ preconditions:
 safety:
   home_margin_deg: 0         # end-of-travel margin (0 = go to the measured max)
   free_torque_pct: 20
-  default_torque_pct: 40
-  grasp_torque_pct: 80
+  default_torque_pct: 20     # STS3036 has ~3x the SCS0009 torque: start low
+  grasp_torque_pct: 40
   watchdog_timeout_s: 1.0
   max_step_deg_per_cycle: 10
-  move_speed: 3              # rustypot speed step (0 = max, 1..6)
+  move_speed: 500            # STS goal_speed in ticks/s (~44 deg/s)
 
 joints:
   # --- Crank: extension = dead center (extremum, not a stop) ---
   index_flex:
     servo_id: 1
-    assembly_position: 511          # horn "up" at this position
+    assembly_position: 2048         # STS electrical zero (0 rad)
     type: crank
     reference: dead_center_midpoint # midpoint of the two flexion stops
     branch: positive                # working direction (positive = close)
-    nominal_travel_deg: 288         # travel measured on the bench (~20..1004 ticks)
+    nominal_travel_deg: 288         # mechanical design travel
     range_tolerance_deg: 15
     max_speed_dps: 120
 
   middle_flex:
     servo_id: 2
-    assembly_position: 511
+    assembly_position: 2048
     type: crank
     reference: dead_center_midpoint
     branch: positive
-    nominal_travel_deg: 288         # measured on the bench (to confirm with CAD)
+    nominal_travel_deg: 288
     range_tolerance_deg: 15
     max_speed_dps: 120
 
   # --- Index+middle abduction: fingers together = stop ---
   index_middle_abd:
     servo_id: 3
-    assembly_position: 511
+    assembly_position: 2048
     type: two_stop
     reference: hard_stop_min         # fingers together (to confirm with CAD)
     reference_side: auto             # side with the greatest reach
     branch: positive
-    nominal_travel_deg: 210         # measured on the bench (to confirm with CAD)
+    nominal_travel_deg: 210
     range_tolerance_deg: 15
     max_speed_dps: 120
 
   # --- Thumb base rotation: a stop on each side (to confirm with CAD) ---
   thumb_rot:
     servo_id: 4
-    assembly_position: 300           # mount reflected at this position (not the 511 zero)
+    assembly_position: 2048
     type: two_stop
     reference: hard_stop_min         # most repeatable stop (to decide)
     reference_side: auto             # side with the greatest reach
     branch: positive
-    nominal_travel_deg: 95          # measured on the bench (to confirm with CAD)
+    nominal_travel_deg: 95
     range_tolerance_deg: 15
     max_speed_dps: 120
 
   # --- Thumb flexion: crank like ID 1 ---
   thumb_flex:
     servo_id: 5
-    assembly_position: 511
+    assembly_position: 2048
     type: crank
     reference: dead_center_midpoint
     branch: positive
-    nominal_travel_deg: 288         # measured on the bench (to confirm with CAD)
+    nominal_travel_deg: 288
     range_tolerance_deg: 15
     max_speed_dps: 120

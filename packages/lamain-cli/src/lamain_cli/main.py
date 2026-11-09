@@ -26,7 +26,13 @@ from datetime import datetime
 from pathlib import Path
 
 from lamain_core import units
-from lamain_core.bus import SERVO_MAX_TICK, SERVO_MIN_TICK, FakeBus, RustypotBus, _scalar
+from lamain_core.bus import (
+    FakeBus,
+    RustypotBus,
+    _scalar,
+    change_servo_id,
+    make_controller,
+)
 from lamain_core.calibration import CalibrationAbort, calibrate_hand
 from lamain_core.controller import HandController, load_calibration
 from lamain_core.demos import (
@@ -57,7 +63,19 @@ def _bus(args, model):
     if getattr(args, "simulate", False):
         return FakeBus.standard_hand(model)
     port = getattr(args, "port", None) or model.bus.port
-    return RustypotBus(port, model.bus.baudrate)
+    return RustypotBus(port, model.servo, model.bus.baudrate)
+
+
+def _move_timeout(model, minimum: float = 3.0) -> float:
+    """Enough time for a full travel at the model speed (STS is 4096 ticks)."""
+    if model.servo.speed_unit == "steps_per_s" and model.safety.move_speed > 0:
+        return max(minimum, 1.2 * model.servo.resolution / model.safety.move_speed)
+    return minimum
+
+
+def _settle_tolerance(model) -> int:
+    """2 ticks at SCS resolution, scaled to the servo."""
+    return max(2, round(2 * model.servo.resolution / 1024))
 
 
 def _model(args):
@@ -89,19 +107,22 @@ def _new_run_dir(kind: str, label: str | None = None, base=None) -> Path:
     return directory
 
 
-def _home_all(bus, model, timeout: float = 3.0) -> None:
+def _home_all(bus, model, timeout: float | None = None) -> None:
     """Bring every joint back to its initial mount zero before any operation."""
+    tol = _settle_tolerance(model)
     for j in model.joints.values():
         bus.set_torque_limit_pct(j.servo_id, model.safety.default_torque_pct)
         bus.set_goal_speed(j.servo_id, model.safety.move_speed)
-        bus.set_torque_enable(j.servo_id, True)
+        # Goal first, torque second: never let a stale goal move the hand.
         bus.write_goal(j.servo_id, j.assembly_position)
+        bus.set_torque_enable(j.servo_id, True)
     elapsed = 0.0
-    while elapsed < timeout:
+    deadline = timeout if timeout is not None else _move_timeout(model)
+    while elapsed < deadline:
         bus.step()
         pos = {j.servo_id: bus.read_position(j.servo_id) for j in model.joints.values()}
         if all(
-            abs(pos[j.servo_id] - j.assembly_position) <= 2
+            abs(pos[j.servo_id] - j.assembly_position) <= tol
             for j in model.joints.values()
         ):
             return
@@ -114,10 +135,10 @@ def _home_all(bus, model, timeout: float = 3.0) -> None:
 # F1 - bus
 # --------------------------------------------------------------------------- #
 def cmd_bus(args) -> int:
-    from rustypot import Scs0009PyController
-
-    port = args.port or _model(args).bus.port
-    c = Scs0009PyController(serial_port=port, baudrate=1_000_000, timeout=0.5)
+    model = _model(args)
+    servo = model.servo
+    port = args.port or model.bus.port
+    c = make_controller(servo, port, model.bus.baudrate)
     try:
         if args.action == "scan":
             found = c.scan()
@@ -130,36 +151,42 @@ def cmd_bus(args) -> int:
                 print(f"  ID {sid:>3}  model {found[sid]:>5}  {volt:.1f} V  {temp} C")
             return 0
 
-        if args.action == "set-id":
-            old, new = args.old, args.new
-            found = c.scan()
-            if len(found) > 1:
-                print(
-                    "Refused: several servos on the bus. "
-                    "Connect ONLY one servo to change an ID."
-                )
-                return 1
-            if old not in found:
-                print(f"Servo {old} not on the bus.")
-                return 1
-            c.write_register(old, "lock", 0)
-            c.write_id(old, new)
-            c.write_register(new, "lock", 1)
-            print(f"ID {old} -> {new} OK.")
-            for sid in sorted(c.scan()):
-                print(f"  present: {sid}")
-            return 0
-
         if args.action == "dump":
-            for reg in Scs0009PyController.registers():
+            for reg in c.registers():
                 try:
                     value = _scalar(c.read_register(args.servo_id, reg.name))
                 except Exception:
                     continue
                 print(f"  {reg.name:28} = {value}")
             return 0
-    finally:
+
+        # set-id
+        old, new = args.old, args.new
+        found = c.scan()
+        if len(found) > 1:
+            print(
+                "Refused: several servos on the bus. "
+                "Connect ONLY one servo to change an ID."
+            )
+            return 1
+        if old not in found:
+            print(f"Servo {old} not on the bus.")
+            return 1
+        # The Bus API needs exclusive access to the port.
         c.close()
+        c = None
+        change_servo_id(port, servo, old, new, model.bus.baudrate)
+        print(f"ID {old} -> {new} OK.")
+        c2 = make_controller(servo, port, model.bus.baudrate)
+        try:
+            for sid in sorted(c2.scan()):
+                print(f"  present: {sid}")
+        finally:
+            c2.close()
+        return 0
+    finally:
+        if c is not None:
+            c.close()
     return 0
 
 
@@ -170,12 +197,24 @@ def cmd_assemble(args) -> int:
     model = _model(args)
     bus = _bus(args, model)
     try:
-        found = set(bus.scan())
+        found = bus.scan()
         expected = {j.servo_id for j in model.joints.values()}
-        missing = sorted(expected - found)
+        missing = sorted(expected - set(found))
         if missing:
             print(f"Missing IDs: {missing}. Check assembly/power.")
             return 1
+        if not bus.simulated and model.servo.model_number is not None:
+            wrong = {
+                sid: model_no
+                for sid, model_no in found.items()
+                if sid in expected and model_no != model.servo.model_number
+            }
+            if wrong:
+                print(
+                    f"Wrong servo model(s): {wrong}; "
+                    f"expected {model.servo.model_number} ({model.servo.model})."
+                )
+                return 1
         print(f"Detected servos: {sorted(found)}")
 
         print("Positions BEFORE:")
@@ -187,9 +226,11 @@ def cmd_assemble(args) -> int:
         for name in model.calibration_order:
             j = model.joint(name)
             bus.set_torque_limit_pct(j.servo_id, model.safety.default_torque_pct)
-            bus.set_torque_enable(j.servo_id, True)
             bus.set_goal_speed(j.servo_id, model.safety.move_speed)
+            # Goal first, torque second: safe even if the servo's previous goal
+            # was left at 0.
             bus.write_goal(j.servo_id, j.assembly_position)
+            bus.set_torque_enable(j.servo_id, True)
             hint = (
                 "horn up (full extension / dead center)"
                 if j.reference.startswith("dead_center")
@@ -198,14 +239,16 @@ def cmd_assemble(args) -> int:
             print(f"  ID {j.servo_id} ({name}) -> {j.assembly_position} ticks: {hint}")
 
         # wait for the servos to reach the target (or not)
+        tol = _settle_tolerance(model)
         elapsed = 0.0
+        deadline = _move_timeout(model)
         reached = {}
-        while elapsed < 3.0:
+        while elapsed < deadline:
             reached = {
                 j.servo_id: bus.read_position(j.servo_id) for j in model.joints.values()
             }
             if all(
-                abs(reached[j.servo_id] - j.assembly_position) <= 2
+                abs(reached[j.servo_id] - j.assembly_position) <= tol
                 for j in model.joints.values()
             ):
                 break
@@ -218,7 +261,7 @@ def cmd_assemble(args) -> int:
             j = model.joint(name)
             pos = reached.get(j.servo_id, bus.read_position(j.servo_id))
             delta = pos - j.assembly_position
-            flag = "OK" if abs(delta) <= 2 else f"DELTA {delta:+d} ticks (stuck?)"
+            flag = "OK" if abs(delta) <= tol else f"DELTA {delta:+d} ticks (stuck?)"
             print(f"  ID {j.servo_id} ({name}): {pos} ticks  [{flag}]")
 
         if not _confirm(
@@ -408,7 +451,7 @@ def cmd_collect(args) -> int:
                 pos = []
                 for j in model.joints.values():
                     ticks = bus.read_position(j.servo_id)
-                    pos.append(round(units.ticks_to_rad(ticks), 6))
+                    pos.append(round(units.ticks_to_rad(ticks, model.servo), 6))
                 writer.writerow([json.dumps(pos), label, args.serial])
                 fh.flush()
                 print(f"  logged ({label}): {pos}")
@@ -430,11 +473,33 @@ def _resolve_calibration(args) -> Path | None:
     return paths.latest_calibration(serial)
 
 
+def _load_matching_calibration(model, path: Path):
+    """Load a calibration and refuse one made for another hardware model."""
+    calibration = load_calibration(path)
+    if calibration.model_version != model.model_version:
+        print(
+            f"Calibration {path} was made for model "
+            f"{calibration.model_version!r}, not {model.model_version!r}. "
+            "Run `lamain calibrate`."
+        )
+        return None
+    if calibration.servo_model and calibration.servo_model != model.servo.model:
+        print(
+            f"Calibration {path} was made for servo "
+            f"{calibration.servo_model!r}, not {model.servo.model!r}. "
+            "Run `lamain calibrate`."
+        )
+        return None
+    return calibration
+
+
 def cmd_studio(args) -> int:
     model = _model(args)
     calib = _resolve_calibration(args)
     if calib is None:
         print("No calibration found. Run `lamain calibrate` first.")
+        return 1
+    if _load_matching_calibration(model, calib) is None:
         return 1
     bus = _bus(args, model)
     keys = KeyReader()
@@ -468,6 +533,9 @@ def cmd_demo_play(args) -> int:
     if calib is None:
         print("No calibration found. Run `lamain calibrate` first.")
         return 1
+    calibration = _load_matching_calibration(model, calib)
+    if calibration is None:
+        return 1
     store = EpisodeStore(args.episode_dir or DEFAULT_EPISODE_DIR)
     gestures = GestureStore(args.gesture_dir or DEFAULT_GESTURE_DIR)
     if args.name in store.list():
@@ -480,7 +548,7 @@ def cmd_demo_play(args) -> int:
         steps = [Step("gesture", None, name=args.name)]
         loops = args.loops or 1
     bus = _bus(args, model)
-    controller = HandController(bus, model, load_calibration(calib))
+    controller = HandController(bus, model, calibration)
     controller.enable_torque(args.torque)
     player = Player(
         controller,
@@ -612,7 +680,11 @@ def _inspect_jog(args, model, bus) -> int:
     """Manual jog to feel whether a blockage is mechanical. Reuses the studio key
     mapping (digits 0-9) and the same KeyReader."""
     torque = args.torque if args.torque is not None else model.calibration.probe_torque_pct
-    step = args.jog_step
+    step = (
+        args.jog_step
+        if args.jog_step is not None
+        else max(1, model.servo.resolution // 128)
+    )
     for j in model.joints.values():
         bus.set_torque_limit_pct(j.servo_id, torque)
         bus.set_goal_speed(j.servo_id, model.safety.move_speed)
@@ -640,7 +712,10 @@ def _inspect_jog(args, model, bus) -> int:
                 name, sign = DEFAULT_KEYMAP[key]
                 j = model.joint(name)
                 start = bus.read_position(j.servo_id)
-                target = max(SERVO_MIN_TICK, min(SERVO_MAX_TICK, start + sign * step))
+                target = max(
+                    model.servo.tick_min,
+                    min(model.servo.tick_max, start + sign * step),
+                )
                 bus.write_goal(j.servo_id, target)
                 bus.step()
                 if not bus.simulated:
@@ -679,6 +754,12 @@ def cmd_inspect(args) -> int:
     names = [args.joint] if args.joint else list(model.joints)
     serial = args.serial or DEFAULT_SERIAL
     run_dir = _new_run_dir("inspect", serial, args.logs_dir)
+    step = args.step if args.step is not None else max(1, model.servo.resolution // 256)
+    end_margin = (
+        args.end_margin
+        if args.end_margin is not None
+        else max(2, round(20 * model.servo.resolution / 1024))
+    )
     try:
         diags = []
         for name in names:
@@ -688,10 +769,10 @@ def cmd_inspect(args) -> int:
                 bus,
                 model,
                 joint,
-                step_ticks=args.step,
+                step_ticks=step,
                 torque_pct=args.torque,
                 settle_s=args.settle,
-                endpoint_margin=args.end_margin,
+                endpoint_margin=end_margin,
             )
             _print_diag(diag, serial)
             diag_write_csv(diag, run_dir / f"{name}.csv")
@@ -822,18 +903,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     i = sub.add_parser("inspect", help="diagnostic sweep of a joint")
     i.add_argument("joint", nargs="?", default=None, help="joint name (default: all)")
-    i.add_argument("--step", type=int, default=4, help="sweep step in ticks")
+    i.add_argument("--step", type=int, default=None,
+                   help="sweep step in ticks (default: model resolution / 256)")
     i.add_argument("--torque", type=float, default=None,
                    help="torque %% (default: probe torque)")
     i.add_argument("--settle", type=float, default=None)
-    i.add_argument("--end-margin", type=int, default=20,
-                   help="ticks from 0/1023 counted as the servo end")
+    i.add_argument("--end-margin", type=int, default=None,
+                   help="ticks from the servo end counted as an internal end")
     i.add_argument("--plot", action=argparse.BooleanOptionalAction, default=True,
                    help="write a PNG plot (default: on; use --no-plot to skip)")
     i.add_argument("--jog", action="store_true",
                    help="manual keyboard jog instead of the sweep (feel the blockage)")
-    i.add_argument("--jog-step", type=int, default=8,
-                   help="ticks per jog key press (with --jog)")
+    i.add_argument("--jog-step", type=int, default=None,
+                   help="ticks per jog key press (default: model resolution / 128)")
     i.add_argument("--serial", default=None)
     i.add_argument("--logs-dir", default=None)
     i.set_defaults(func=cmd_inspect)

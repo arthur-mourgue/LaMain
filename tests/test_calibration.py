@@ -1,3 +1,4 @@
+from lamain_core import units
 from lamain_core.bus import FakeBus, FakeServo
 from lamain_core.calibration import calibrate_hand
 from lamain_core.model import default_model_path, load_hand_model
@@ -10,6 +11,11 @@ def make_model():
 def test_model_loads_all_joints():
     m = make_model()
     assert len(m.joints) == 5
+    assert m.servo.model == "STS3036"
+    assert m.servo.resolution == 4096
+    assert m.servo.range_deg == 360.0
+    assert m.servo.controller == "Sts3215PyController"
+    assert all(j.assembly_position == m.servo.mid_tick for j in m.joints.values())
     assert m.calibration_order == (
         "index_flex",
         "middle_flex",
@@ -64,20 +70,22 @@ def test_calibration_is_repeatable():
 
 def test_blocked_joint_is_reported_failed():
     m = make_model()
-    from lamain_core import units
+    mid = m.servo.mid_tick
 
     servos = []
     for name in m.calibration_order:
         j = m.joint(name)
         if j.servo_id == 1:
-            servos.append(FakeServo(1, stop_min=511, stop_max=511, position=511, goal=511))
+            servos.append(
+                FakeServo(1, stop_min=mid, stop_max=mid, position=mid, goal=mid)
+            )
         else:
-            half = units.deg_to_ticks(j.nominal_travel_deg / 2)
+            half = units.deg_to_ticks(j.nominal_travel_deg / 2, m.servo)
             servos.append(
                 FakeServo(
                     j.servo_id,
-                    stop_min=max(0, j.assembly_position - half),
-                    stop_max=min(1023, j.assembly_position + half),
+                    stop_min=max(m.servo.tick_min, j.assembly_position - half),
+                    stop_max=min(m.servo.tick_max, j.assembly_position + half),
                     position=j.assembly_position,
                     goal=j.assembly_position,
                 )
@@ -93,7 +101,14 @@ def test_no_mechanical_stop_is_flagged():
     # end -> calibration marked as failed.
     m = make_model()
     servos = [
-        FakeServo(1, stop_min=0, stop_max=1023, position=511, goal=511, speed_ticks=40)
+        FakeServo(
+            1,
+            stop_min=m.servo.tick_min,
+            stop_max=m.servo.tick_max,
+            position=m.servo.mid_tick,
+            goal=m.servo.mid_tick,
+            speed_ticks=max(1, m.servo.resolution // 25),
+        )
     ]
     bus = FakeBus(servos)
     from lamain_core.calibration import CalibrationLog, calibrate_joint

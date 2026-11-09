@@ -64,8 +64,10 @@ class SafetyFilter:
 
     def max_step_ticks(self, name: str) -> int:
         if self.max_step_override_deg is not None:
-            return units.deg_to_ticks(self.max_step_override_deg)
-        return units.deg_to_ticks(self.model.safety.max_step_deg_per_cycle)
+            return units.deg_to_ticks(self.max_step_override_deg, self.model.servo)
+        return units.deg_to_ticks(
+            self.model.safety.max_step_deg_per_cycle, self.model.servo
+        )
 
     def clamp_ticks(self, name: str, desired: int) -> int:
         lim = self.limits[name]

@@ -10,9 +10,9 @@ def _model_bus():
 
 def test_sweep_reports_full_travel():
     m, bus = _model_bus()
-    d = sweep_joint(bus, m, m.joint("index_flex"), step_ticks=8)
-    assert d.stop_low <= 25
-    assert d.stop_high >= 995
+    d = sweep_joint(bus, m, m.joint("index_flex"), step_ticks=16)
+    assert d.stop_low < m.servo.mid_tick
+    assert d.stop_high > m.servo.mid_tick
     assert d.travel_deg > 250
     assert d.temp_max >= 0
     assert d.voltage_min > 0
@@ -21,8 +21,18 @@ def test_sweep_reports_full_travel():
 def test_sweep_flags_a_servo_end():
     m = load_hand_model(default_model_path())
     # stop low inside the travel, stop high at the servo end
-    bus = FakeBus([FakeServo(4, stop_min=200, stop_max=1005, position=300, goal=300)])
-    d = sweep_joint(bus, m, m.joint("thumb_rot"), step_ticks=8)
+    bus = FakeBus(
+        [
+            FakeServo(
+                4,
+                stop_min=800,
+                stop_max=m.servo.tick_max - 18,
+                position=1000,
+                goal=1000,
+            )
+        ]
+    )
+    d = sweep_joint(bus, m, m.joint("thumb_rot"), step_ticks=16)
     assert d.low_is_servo_end is False
     assert d.high_is_servo_end is True
     assert "internal end" in d.verdict
@@ -30,7 +40,7 @@ def test_sweep_flags_a_servo_end():
 
 def test_outputs(tmp_path):
     m, bus = _model_bus()
-    d = sweep_joint(bus, m, m.joint("index_flex"), step_ticks=8)
+    d = sweep_joint(bus, m, m.joint("index_flex"), step_ticks=16)
     csv_path = tmp_path / "d.csv"
     write_csv(d, csv_path)
     assert csv_path.exists()

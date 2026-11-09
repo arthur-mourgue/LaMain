@@ -345,7 +345,9 @@ class Player:
         speed_dps = min(
             self.controller.model.joint(n).max_speed_dps for n in a
         ) or 120.0
-        max_deg = max(abs(b[n] - a[n]) for n in a) * units.DEG_PER_TICK
+        max_deg = units.ticks_to_deg(
+            max(abs(b[n] - a[n]) for n in a), self.controller.model.servo
+        )
         return max(self.options.min_step_s, max_deg / speed_dps)
 
     def _interpolate_ticks(self, target: dict[str, int], duration: float, stop_flag) -> None:

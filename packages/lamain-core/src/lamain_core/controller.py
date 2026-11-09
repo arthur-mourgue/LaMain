@@ -28,6 +28,7 @@ def load_calibration(path: str | Path) -> HandCalibration:
     return HandCalibration(
         hand_serial=data.get("hand_serial", "unknown"),
         model_version=data.get("model_version", "unknown"),
+        servo_model=data.get("servo_model", ""),
         joints=joints,
         created_at=data.get("created_at", ""),
         software_version=data.get("software_version", "0.1.0"),
@@ -74,6 +75,16 @@ class HandController:
                 "invalid calibration: refusing to start. "
                 "Run `lamain calibrate` (or fix the failed joints)."
             )
+        if calibration.model_version != model.model_version:
+            raise RuntimeError(
+                f"calibration was made for model {calibration.model_version!r}, "
+                f"not {model.model_version!r}: run `lamain calibrate`."
+            )
+        if calibration.servo_model and calibration.servo_model != model.servo.model:
+            raise RuntimeError(
+                f"calibration was made for servo {calibration.servo_model!r}, "
+                f"not {model.servo.model!r}: run `lamain calibrate`."
+            )
         self.bus = bus
         self.model = model
         self.calibration = calibration
@@ -91,7 +102,9 @@ class HandController:
     ) -> "HandController":
         model = load_hand_model(model_path or default_model_path())
         calib = load_calibration(calibration_path)
-        bus = RustypotBus(port or model.bus.port, model.bus.baudrate)
+        bus = RustypotBus(
+            port or model.bus.port, model.servo, model.bus.baudrate
+        )
         return cls(bus, model, calib, safety_mode=safety_mode)
 
     def connect(self) -> None:
@@ -109,6 +122,10 @@ class HandController:
         pct = self.safety.torque_pct(mode)
         for j in self.model.joints.values():
             self.bus.set_torque_limit_pct(j.servo_id, pct)
+            self.bus.set_goal_speed(j.servo_id, self.model.safety.move_speed)
+            # Hold the current pose before enabling torque: a stale goal (0
+            # after a power cycle) would make the joint jump.
+            self.bus.write_goal(j.servo_id, self.bus.read_position(j.servo_id))
             self.bus.set_torque_enable(j.servo_id, True)
 
     def disable_torque(self) -> None:
@@ -130,11 +147,15 @@ class HandController:
     # conversions ----------------------------------------------------------- #
     def _rad_to_ticks(self, name: str, rad: float) -> int:
         cal = self.calibration.joints[name]
-        return cal.reference_ticks + cal.direction * units.rad_to_ticks(rad)
+        return cal.reference_ticks + cal.direction * units.rad_to_ticks(
+            rad, self.model.servo
+        )
 
     def _ticks_to_rad(self, name: str, ticks: int) -> float:
         cal = self.calibration.joints[name]
-        return cal.direction * (ticks - cal.reference_ticks) * units.RAD_PER_TICK
+        return cal.direction * units.ticks_to_rad(
+            ticks - cal.reference_ticks, self.model.servo
+        )
 
     # joint API ------------------------------------------------------------- #
     def get_joint_positions(self) -> dict[str, float]:
@@ -197,19 +218,19 @@ class HandController:
 
     def q_span_deg(self, name: str, sign: int) -> float:
         pos, neg = self._spans_ticks(name)
-        return units.ticks_to_deg(pos if sign > 0 else neg)
+        return units.ticks_to_deg(pos if sign > 0 else neg, self.model.servo)
 
     def q_to_deg(self, name: str, q: float) -> float:
         """Joint angle in degrees for a normalized command q in [-1, 1]."""
         pos, neg = self._spans_ticks(name)
-        span = units.ticks_to_rad(pos if q >= 0 else neg)
+        span = units.ticks_to_rad(pos if q >= 0 else neg, self.model.servo)
         return math.degrees(q * span)
 
     def get_normalized(self) -> dict[str, float]:
         out: dict[str, float] = {}
         for name, rad in self.get_joint_positions().items():
             pos, neg = self._spans_ticks(name)
-            span = units.ticks_to_rad(pos if rad >= 0 else neg)
+            span = units.ticks_to_rad(pos if rad >= 0 else neg, self.model.servo)
             out[name] = rad / span if span else 0.0
         return out
 
@@ -218,7 +239,7 @@ class HandController:
         for name, q in values.items():
             q = max(-1.0, min(1.0, q))
             pos, neg = self._spans_ticks(name)
-            span = units.ticks_to_rad(pos if q >= 0 else neg)
+            span = units.ticks_to_rad(pos if q >= 0 else neg, self.model.servo)
             targets[name] = q * span
         return self.set_joint_positions(targets)
 
@@ -229,6 +250,8 @@ class HandController:
             return
         for name, cal in self.calibration.joints.items():
             j = self.model.joint(name)
+            # EEPROM writes need the torque released and the lock open.
+            self.bus.set_torque_enable(j.servo_id, False)
             self.bus.write_register(j.servo_id, "lock", 0)
             self.bus.write_register(j.servo_id, "min_position_limit", cal.min_ticks)
             self.bus.write_register(j.servo_id, "max_position_limit", cal.max_ticks)
