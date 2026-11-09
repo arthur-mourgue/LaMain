@@ -24,7 +24,8 @@ from lamain_core import (
 JOG_HELP = (
     "Jog keys (one step per press):\n"
     "  0/1 index flex   2/3 middle flex   4/5 abduction\n"
-    "  6/7 thumb base   8/9 thumb flex"
+    "  6/7 thumb base   8/9 thumb flex\n"
+    "  Up/Down = thumb flex   Left/Right = thumb rotation"
 )
 
 

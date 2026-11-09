@@ -8,6 +8,13 @@ import termios
 import tty
 from typing import Protocol
 
+ARROWS = {
+    "\x1b[A": "up",
+    "\x1b[B": "down",
+    "\x1b[C": "right",
+    "\x1b[D": "left",
+}
+
 
 class KeySource(Protocol):
     def read_key(self, timeout: float | None = None) -> str | None: ...
@@ -65,6 +72,15 @@ class KeyReader:
         if not ready:
             return None
         ch = self._stream.read(1)
+        if ch == "\x1b":
+            # Arrow keys arrive as ESC [ A/B/C/D; consume the tail promptly.
+            seq = ch
+            while len(seq) < 3:
+                ready, _, _ = select.select([self._stream], [], [], 0.01)
+                if not ready:
+                    break
+                seq += self._stream.read(1)
+            return ARROWS.get(seq, seq)
         return ch or None
 
     def prompt_line(self, prompt: str) -> str:

@@ -689,6 +689,7 @@ def _inspect_jog(args, model, bus) -> int:
     keys = KeyReader()
     print(f"Jog mode (torque {torque:.0f}%, step {step} ticks). Ctrl-C or 'q' to quit.")
     print("  0/1 index   2/3 middle   4/5 abduction   6/7 thumb base   8/9 thumb flex")
+    print("  Up/Down = thumb flex   Left/Right = thumb rotation")
     print("  'l' = read all positions/loads, 'q' = quit.")
     try:
         while True:
