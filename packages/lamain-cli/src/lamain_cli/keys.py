@@ -2,6 +2,7 @@
 """Non-blocking keyboard input for the studio (Linux, no extra dependency)."""
 from __future__ import annotations
 
+import os
 import select
 import sys
 import termios
@@ -68,18 +69,26 @@ class KeyReader:
             if not line:
                 return None
             return line[0]
-        ready, _, _ = select.select([self._stream], [], [], timeout)
+        ready, _, _ = select.select([self._fd], [], [], timeout)
         if not ready:
             return None
-        ch = self._stream.read(1)
+        raw = os.read(self._fd, 1)
+        if not raw:
+            return None
+        ch = raw.decode("utf-8", errors="ignore")
         if ch == "\x1b":
-            # Arrow keys arrive as ESC [ A/B/C/D; consume the tail promptly.
+            # Arrow keys arrive as ESC [ A/B/C/D. Read the tail on the fd
+            # itself: the text stream's buffer may already hold it, which
+            # select() on the fd cannot see.
             seq = ch
             while len(seq) < 3:
-                ready, _, _ = select.select([self._stream], [], [], 0.01)
+                ready, _, _ = select.select([self._fd], [], [], 0.01)
                 if not ready:
                     break
-                seq += self._stream.read(1)
+                raw = os.read(self._fd, 1)
+                if not raw:
+                    break
+                seq += raw.decode("utf-8", errors="ignore")
             return ARROWS.get(seq, seq)
         return ch or None
 
