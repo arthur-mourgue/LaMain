@@ -25,7 +25,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from lamain_core import units
+from lamain_core import paths, units
 from lamain_core.bus import (
     FakeBus,
     RustypotBus,
@@ -38,17 +38,17 @@ from lamain_core.controller import HandController, load_calibration
 from lamain_core.demos import (
     EpisodeStore,
     GestureStore,
-    PlayOptions,
     Player,
     PlayerStopped,
+    PlayOptions,
     Step,
 )
 from lamain_core.diagnostics import plot as diag_plot
 from lamain_core.diagnostics import sweep_joint
 from lamain_core.diagnostics import write_csv as diag_write_csv
-from lamain_core.model import default_model_path, load_hand_model
-from lamain_core import paths
 from lamain_core.jog import DEFAULT_KEYMAP
+from lamain_core.model import default_model_path, load_hand_model
+
 from lamain_cli.keys import KeyReader
 from lamain_cli.studio import Studio
 
