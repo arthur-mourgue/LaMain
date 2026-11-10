@@ -1,21 +1,18 @@
 # LaMain
 
-An open, low-cost three-finger hand for the SO-101 arm.
+An open, low-cost three-finger hand for the SO-101 arm, designed to stay under 200 g and
+under 200 EUR.
 
 <p align="center">
   <img src="docs/lamain.gif" alt="LaMain prototype in motion" width="360">
 </p>
 
-LaMain is an early prototype: the mechanics and the servo control work, but the tactile
-sensing and the learning stack are still being built. Interfaces and hardware will
-change as they land.
-
 ## Why
 
-Tactile data is scarce, and most hands able to produce it are expensive or closed.
-Learning-based manipulation needs many cheap and comparable devices to collect that
-data. LaMain is meant to be one of them: a 3D-printed hand that mounts on an SO-101 arm
-and runs on hobby servos, designed to stay under 200 g and under 200 EUR.
+Tactile data is scarce, and most hands able to produce it are expensive or closed, while
+learning-based manipulation needs many cheap and comparable devices to collect that
+data. LaMain is meant to be one of them, a 3D-printed hand that mounts on an SO-101 arm
+and runs on hobby servos.
 
 ## How it works
 
@@ -60,7 +57,7 @@ uv run pytest           # tests on FakeBus, no hardware
 
 ```
 lamain/
-├── packages/lamain-core/   # library: bus, model, calibration, safety, controller, demos
+├── packages/lamain-core/   # library, bus, model, calibration, safety, controller
 ├── packages/lamain-cli/    # the `lamain` CLI
 ├── hands/LM-0001/          # per-hand build manifest and calibration files
 ├── demos/                  # gestures and episodes
@@ -77,7 +74,7 @@ tag, and the switch to the STS3036 is recorded in
 
 ## Planned
 
-The tactile fingertip pad and the policy integration come next, followed by a URDF
+The tactile fingertip pad and the policy integration come first, followed by a URDF
 generator, a LeRobot plugin and a reproducible benchmark against the stock gripper. The
 open bench tests are listed in [docs/ROADMAP.md](docs/ROADMAP.md).
 
