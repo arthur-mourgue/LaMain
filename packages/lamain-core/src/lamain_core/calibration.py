@@ -146,12 +146,16 @@ def _read(
 
 
 def _scan_torque(model: HandModel, joint: JointModel) -> float:
-    """Torque used while sweeping (same for every joint)."""
+    """Torque used while sweeping (per-joint override allowed)."""
+    if joint.calibration_torque_pct is not None:
+        return joint.calibration_torque_pct
     return model.calibration.torque_pct
 
 
 def _probe_torque(model: HandModel, joint: JointModel) -> float:
-    """Torque used to push/confirm a stop (same for every joint)."""
+    """Torque used to push/confirm a stop (per-joint override allowed)."""
+    if joint.probe_torque_pct is not None:
+        return joint.probe_torque_pct
     return model.calibration.probe_torque_pct
 
 

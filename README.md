@@ -10,7 +10,7 @@ The smallest three-finger end-effector with tactile feedback that replaces the S
 
 An early prototype. The goal is a low-cost, low-weight hand for the SO-101 arm, with LeRobot integration planned.
 
-Five Feetech **STS3036** servos (6 V, 360°, 4096 ticks) drive `index_flex`, `middle_flex`, `index_middle_abd`, `thumb_rot` and `thumb_flex`. Their geometry and limits come from the `hand_model.yaml` bundled in `lamain-core`. The earlier SCS0009 design is archived at the `scs0009-final` git tag.
+Five Feetech **STS3036** servos (6 V, 360°, 4096 ticks) drive `index_flex`, `middle_flex`, `abduction`, `thumb_rot` and `thumb_flex`. Their geometry and limits come from the `hand_model.yaml` bundled in `lamain-core`. The earlier SCS0009 design is archived at the `scs0009-final` git tag.
 
 The code already handles automatic calibration at reduced torque, a safety filter for range and step limits, the `HandController` command layer, a keyboard studio for gestures and playback, and per-joint diagnostics. Tests run on a simulated bus, so no hardware is needed.
 

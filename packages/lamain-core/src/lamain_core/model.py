@@ -68,6 +68,8 @@ class JointModel:
     max_speed_dps: float
     joint_type: str = "two_stop"
     reference_side: str = "auto"
+    calibration_torque_pct: float | None = None
+    probe_torque_pct: float | None = None
 
     def __post_init__(self) -> None:
         if self.reference not in REFERENCE_STRATEGIES:
@@ -207,6 +209,16 @@ def _joint_from_dict(name: str, raw: dict) -> JointModel:
         max_speed_dps=float(raw.get("max_speed_dps", 120.0)),
         joint_type=raw.get("type", "two_stop"),
         reference_side=raw.get("reference_side", "auto"),
+        calibration_torque_pct=(
+            None
+            if raw.get("calibration_torque_pct") is None
+            else float(raw["calibration_torque_pct"])
+        ),
+        probe_torque_pct=(
+            None
+            if raw.get("probe_torque_pct") is None
+            else float(raw["probe_torque_pct"])
+        ),
     )
 
 
