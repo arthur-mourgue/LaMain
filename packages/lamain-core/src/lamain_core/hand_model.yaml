@@ -26,9 +26,10 @@ bus:
     acceleration: 50    # 0 leaves the servo motionless on this firmware
     model_number: 521
 
-# Calibration order: thumb last, fingers extended and spread, to avoid a false
-# stop caused by a collision.
-calibration_order: [index_flex, middle_flex, index_middle_abd, thumb_rot, thumb_flex]
+# Calibration order: abduction first (spreads the fingers), then index/middle,
+# thumb last. Every joint is reset to the assembly zero before and after each
+# joint by the default calibration; do not use --batch.
+calibration_order: [index_middle_abd, index_flex, middle_flex, thumb_rot, thumb_flex]
 
 calibration:
   # Tick values are scaled from the SCS0009 design (x4): 8 ticks ~= 0.70 deg.
@@ -72,7 +73,7 @@ safety:
 joints:
   # --- Crank: extension = dead center (extremum, not a stop) ---
   index_flex:
-    servo_id: 1
+    servo_id: 2
     assembly_position: 2048         # STS electrical zero (0 rad)
     type: crank
     reference: dead_center_midpoint # midpoint of the two flexion stops
@@ -82,7 +83,7 @@ joints:
     max_speed_dps: 120
 
   middle_flex:
-    servo_id: 2
+    servo_id: 3
     assembly_position: 2048
     type: crank
     reference: dead_center_midpoint
@@ -92,8 +93,9 @@ joints:
     max_speed_dps: 120
 
   # --- Index+middle abduction: fingers together = stop ---
+  # Physical mapping: the abduction servo is the first one in the hand (ID 1).
   index_middle_abd:
-    servo_id: 3
+    servo_id: 1
     assembly_position: 2048
     type: two_stop
     reference: hard_stop_min         # fingers together (to confirm with CAD)

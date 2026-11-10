@@ -18,12 +18,17 @@ def test_model_loads_all_joints():
     assert m.servo.acceleration == 50
     assert all(j.assembly_position == m.servo.mid_tick for j in m.joints.values())
     assert m.calibration_order == (
+        "index_middle_abd",
         "index_flex",
         "middle_flex",
-        "index_middle_abd",
         "thumb_rot",
         "thumb_flex",
     )
+    assert m.joint("index_flex").servo_id == 2
+    assert m.joint("middle_flex").servo_id == 3
+    assert m.joint("index_middle_abd").servo_id == 1
+    assert m.joint("thumb_rot").servo_id == 4
+    assert m.joint("thumb_flex").servo_id == 5
     assert m.joint("index_flex").is_crank
     assert m.joint("index_middle_abd").joint_type == "two_stop"
     assert m.joint("thumb_rot").joint_type == "two_stop"
@@ -76,9 +81,15 @@ def test_blocked_joint_is_reported_failed():
     servos = []
     for name in m.calibration_order:
         j = m.joint(name)
-        if j.servo_id == 1:
+        if j.name == "index_flex":
             servos.append(
-                FakeServo(1, stop_min=mid, stop_max=mid, position=mid, goal=mid)
+                FakeServo(
+                    j.servo_id,
+                    stop_min=mid,
+                    stop_max=mid,
+                    position=mid,
+                    goal=mid,
+                )
             )
         else:
             half = units.deg_to_ticks(j.nominal_travel_deg / 2, m.servo)
@@ -103,7 +114,7 @@ def test_no_mechanical_stop_is_flagged():
     m = make_model()
     servos = [
         FakeServo(
-            1,
+            m.joint("index_flex").servo_id,
             stop_min=m.servo.tick_min,
             stop_max=m.servo.tick_max,
             position=m.servo.mid_tick,

@@ -89,7 +89,7 @@ def _valid_joint(model) -> JointCalibration:
     mid = model.servo.mid_tick
     return JointCalibration(
         name="index_flex",
-        servo_id=1,
+        servo_id=model.joint("index_flex").servo_id,
         joint_type="crank",
         mount_ticks=mid,
         reference_ticks=mid,
