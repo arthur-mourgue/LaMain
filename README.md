@@ -15,7 +15,7 @@ change as they land.
 Tactile data is scarce, and most hands able to produce it are expensive or closed.
 Learning-based manipulation needs many cheap and comparable devices to collect that
 data. LaMain is meant to be one of them: a 3D-printed hand that mounts on an SO-101 arm
-and runs on hobby servos, for a target cost under 200 EUR and a target mass under 200 g.
+and runs on hobby servos, designed to stay under 200 g and under 200 EUR.
 
 ## How it works
 
