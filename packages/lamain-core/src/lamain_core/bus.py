@@ -2,22 +2,24 @@
 """Servo access: common interface, real rustypot driver and FakeBus.
 
 The rest of the library only talks to `ServoBus`, never directly to rustypot.
-Register addresses are avoided: access goes through rustypot's register table
-(`Scs0009PyController.registers()`), by name.
+Register addresses are avoided: access goes through rustypot's register table,
+by name. The servo family (SCS0009, STS3036, ...) comes from `ServoSpec`, so
+the bus itself contains no family-specific constant.
 """
 from __future__ import annotations
 
 import random
+import time
 from dataclasses import dataclass
 from typing import Protocol
 
+from . import units
+from .units import ServoSpec
+
 TORQUE_ON = 1
 TORQUE_OFF = 2
-TORQUE_FREE = 3
 
-TORQUE_REG_FULL_SCALE = 1000  # register 16: 1000 = 100 %
-SERVO_MIN_TICK = 0
-SERVO_MAX_TICK = 1023
+TORQUE_REG_FULL_SCALE = 1000  # register 16/48: 1000 = 100 %
 STALL_LOAD = 1000.0           # load (present_load) when stalled at 100 % torque
 
 
@@ -37,6 +39,54 @@ def _scalar(value):
         return value[0]
     except (TypeError, IndexError, KeyError):
         return value
+
+
+def controller_class(servo: ServoSpec):
+    """Resolve the rustypot controller class from the model's servo spec."""
+    import rustypot
+
+    name = servo.controller
+    cls = getattr(rustypot, name, None)
+    if cls is None or not name.endswith("PyController"):
+        raise ValueError(
+            f"unknown rustypot controller {name!r} for servo {servo.model!r}"
+        )
+    return cls
+
+
+def make_controller(servo: ServoSpec, port: str, baudrate: int, timeout: float = 0.5):
+    """Open a rustypot controller for the CLI bus tools."""
+    return controller_class(servo)(
+        serial_port=port, baudrate=baudrate, timeout=timeout
+    )
+
+
+def change_servo_id(
+    port: str,
+    servo: ServoSpec,
+    old_id: int,
+    new_id: int,
+    baudrate: int = 1_000_000,
+    timeout: float = 0.5,
+) -> None:
+    """Change one servo's ID, opening the EEPROM lock first.
+
+    Uses rustypot's `Bus` API, which works for both the SCS and STS families.
+    The caller must have exactly one servo on the bus.
+    """
+    from rustypot import Bus
+
+    definition = controller_class(servo).definition()
+    # Include the new id in the map so the EEPROM lock can be closed again
+    # once the servo answers under its new id.
+    motors = {old_id: definition, new_id: definition}
+    with Bus(port, baudrate, timeout, motors) as bus:
+        bus.change_id(definition, old_id, new_id)
+        try:
+            bus.write_register(new_id, "lock", 1)
+        except Exception:
+            # Some firmware applies the id only at the next power cycle.
+            bus.write_register(old_id, "lock", 1)
 
 
 class ServoBus(Protocol):
@@ -67,11 +117,18 @@ class ServoBus(Protocol):
 class RustypotBus:
     simulated = False
 
-    def __init__(self, port: str, baudrate: int = 1_000_000, timeout: float = 0.2):
-        from rustypot import Scs0009PyController
-
+    def __init__(
+        self,
+        port: str,
+        servo: ServoSpec,
+        baudrate: int = 1_000_000,
+        timeout: float = 0.2,
+    ):
+        self.servo = servo
         self._port = port
-        self._c = Scs0009PyController(
+        self._baudrate = baudrate
+        self._timeout = timeout
+        self._c = controller_class(servo)(
             serial_port=port, baudrate=baudrate, timeout=timeout
         )
 
@@ -95,8 +152,8 @@ class RustypotBus:
             raise BusError(f"write {name} servo {servo_id}: {exc}") from exc
 
     def read_position(self, servo_id: int) -> int:
-        # Raw 0-1023 register (rustypot's "raw" API uses a different multi-turn
-        # representation, unrelated to ticks).
+        # Raw position register (0..resolution-1), by name so the family's word
+        # order and encoding are handled by rustypot.
         return self._read_reg(servo_id, "present_position")
 
     def read_load(self, servo_id: int) -> int:
@@ -106,7 +163,7 @@ class RustypotBus:
         return self._read_reg(servo_id, "present_temperature")
 
     def read_voltage(self, servo_id: int) -> float:
-        # present_voltage register: raw value in 0.1 V.
+        # present_voltage register: raw value in 0.1 V on both families.
         return self._read_reg(servo_id, "present_voltage") / 10.0
 
     def read_moving(self, servo_id: int) -> int:
@@ -116,24 +173,33 @@ class RustypotBus:
         self._write_reg(servo_id, "goal_position", int(ticks))
 
     def set_goal_speed(self, servo_id: int, speed: float) -> None:
-        # rustypot: 0 = max speed, 1..6 = speed step.
+        # On the STS3036 firmware, acceleration 0 leaves the servo motionless
+        # (verified on the bench): write the model ramp before the speed.
+        if self.servo.acceleration is not None:
+            self._write_reg(servo_id, "acceleration", self.servo.acceleration)
+        if self.servo.speed_unit == "steps_per_s":
+            # STS goal_speed is a signed 16-bit value in steps/s.
+            self._write_reg(servo_id, "goal_speed", int(round(speed)))
+            return
+        # SCS rustypot speed step: 0 = max speed, 1..6 = speed step.
         try:
             self._c.write_goal_speed(servo_id, float(speed))
         except Exception as exc:
             raise BusError(f"write goal_speed servo {servo_id}: {exc}") from exc
 
     def set_torque_enable(self, servo_id: int, on: bool) -> None:
-        try:
-            self._c.write_torque_enable(servo_id, TORQUE_ON if on else TORQUE_OFF)
-        except Exception as exc:
-            raise BusError(f"torque servo {servo_id}: {exc}") from exc
+        self._write_reg(
+            servo_id,
+            "torque_enable",
+            self.servo.torque_on if on else self.servo.torque_off,
+        )
 
     def read_torque_enable(self, servo_id: int) -> int:
         return self._read_reg(servo_id, "torque_enable")
 
     def set_torque_limit_pct(self, servo_id: int, pct: float) -> None:
         value = int(round(max(0.0, min(100.0, pct)) * TORQUE_REG_FULL_SCALE / 100.0))
-        self._write_reg(servo_id, "max_torque_limit", value)
+        self._write_reg(servo_id, self.servo.torque_register, value)
 
     def read_register(self, servo_id: int, name: str) -> int:
         return self._read_reg(servo_id, name)
@@ -172,22 +238,27 @@ class FakeBus:
 
     simulated = True
 
-    def __init__(self, servos: list[FakeServo], seed: int = 0):
+    def __init__(
+        self,
+        servos: list[FakeServo],
+        seed: int = 0,
+        servo: ServoSpec | None = None,
+    ):
         self._servos = {s.servo_id: s for s in servos}
         self._rng = random.Random(seed)
+        self.servo = servo
 
     # construction ---------------------------------------------------------- #
     @classmethod
     def standard_hand(cls, model, seed: int = 0) -> "FakeBus":
-        from . import units
-
+        servo = model.servo
         servos = []
         for name in model.calibration_order:
             j = model.joint(name)
-            half = units.deg_to_ticks(j.nominal_travel_deg / 2.0)
+            half = units.deg_to_ticks(j.nominal_travel_deg / 2.0, servo)
             asm = j.assembly_position
-            stop_min = max(SERVO_MIN_TICK, asm - half)
-            stop_max = min(SERVO_MAX_TICK, asm + half)
+            stop_min = max(servo.tick_min, asm - half)
+            stop_max = min(servo.tick_max, asm + half)
             servos.append(
                 FakeServo(
                     servo_id=j.servo_id,
@@ -196,9 +267,10 @@ class FakeBus:
                     assembly_position=asm,
                     position=asm,
                     goal=asm,
+                    speed_ticks=max(1, round(24 * servo.resolution / 1024)),
                 )
             )
-        return cls(servos, seed=seed)
+        return cls(servos, seed=seed, servo=servo)
 
     # protocol -------------------------------------------------------------- #
     def scan(self) -> dict[int, int]:
@@ -246,7 +318,10 @@ class FakeBus:
         self._s(servo_id).torque_enabled = bool(on)
 
     def read_torque_enable(self, servo_id: int) -> int:
-        return TORQUE_ON if self._s(servo_id).torque_enabled else TORQUE_OFF
+        on = self._s(servo_id).torque_enabled
+        if self.servo is not None:
+            return self.servo.torque_on if on else self.servo.torque_off
+        return TORQUE_ON if on else TORQUE_OFF
 
     def set_torque_limit_pct(self, servo_id: int, pct: float) -> None:
         self._s(servo_id).torque_limit_pct = max(0.0, min(100.0, pct))
@@ -257,13 +332,13 @@ class FakeBus:
             return self.read_temperature(servo_id)
         if name == "present_voltage":
             return int(self.read_voltage(servo_id) * 10)
-        if name == "max_torque_limit":
+        if name in ("max_torque_limit", "torque_limit"):
             return int(self._s(servo_id).torque_limit_pct * TORQUE_REG_FULL_SCALE / 100)
         raise BusError(f"register {name!r} not simulated")
 
     def write_register(self, servo_id: int, name: str, value: int) -> None:
         self._s(servo_id)
-        if name == "max_torque_limit":
+        if name in ("max_torque_limit", "torque_limit"):
             self._s(servo_id).torque_limit_pct = value * 100.0 / TORQUE_REG_FULL_SCALE
         else:
             raise BusError(f"register {name!r} not simulated")
@@ -282,3 +357,54 @@ class FakeBus:
 
     def close(self) -> None:
         return None
+
+
+# --------------------------------------------------------------------------- #
+# Ramped move (shared by calibration, diagnostics and the CLI)
+# --------------------------------------------------------------------------- #
+def move_to(
+    bus: ServoBus,
+    servo_id: int,
+    target: int,
+    max_step: int,
+    timeout_s: float,
+    settle_s: float = 0.02,
+    stall_reads: int = 20,
+    tolerance: int = 1,
+) -> bool:
+    """Step the goal towards `target`; return True when reached.
+
+    The STS3036 ignores a direct goal jump larger than about 1000 ticks (the
+    servo simply does not move). Every caller must therefore ramp the goal in
+    `max_step` increments instead of writing the final position once.
+
+    `tolerance` is how close counts as arrived: the position loop has a few
+    ticks of deadband, so demanding 1 tick reports a healthy joint as stuck.
+
+    Give up after `stall_reads` reads without getting closer, instead of
+    pushing at the torque limit until `timeout_s`: a blocked joint must not
+    cook the servo.
+    """
+    deadline = time.monotonic() + timeout_s
+    max_step = max(1, int(max_step))
+    tolerance = max(0, int(tolerance))
+    best = None
+    no_progress = 0
+    while time.monotonic() < deadline:
+        current = bus.read_position(servo_id)
+        remaining = abs(current - target)
+        if remaining <= tolerance:
+            return True
+        step = max(-max_step, min(max_step, target - current))
+        bus.write_goal(servo_id, current + step)
+        bus.step()
+        if not bus.simulated:
+            time.sleep(settle_s)
+        if best is None or remaining < best:
+            best = remaining
+            no_progress = 0
+        else:
+            no_progress += 1
+            if no_progress >= stall_reads:
+                return False
+    return False

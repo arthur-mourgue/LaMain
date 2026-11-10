@@ -1,6 +1,6 @@
 # LaMain
 
-Open-source three-finger hand with tactile sensing that replaces the SO-101 gripper. Five Feetech SCS0009 servos.
+Open-source three-finger hand with tactile sensing that replaces the SO-101 gripper. Five Feetech STS3036 servos.
 
 ## Commands
 

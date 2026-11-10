@@ -28,7 +28,7 @@ A separate package `lerobot_robot_lamain`, depending on `lamain-core`. The
 hand is used with `--robot.type=lamain`.
 
 TODO: map each LeRobot motor/feature name to the lamain-core joint names
-(`index_flex`, `middle_flex`, `index_middle_abd`, `thumb_rot`, `thumb_flex`).
+(`index_flex`, `middle_flex`, `abduction`, `thumb_rot`, `thumb_flex`).
 
 ## Benchmark tasks
 

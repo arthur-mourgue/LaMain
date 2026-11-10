@@ -49,6 +49,23 @@ def test_jog_stays_within_bounds():
     assert ticks == lim.max_ticks
 
 
+def test_arrow_keys_jog_the_thumb():
+    m, ctrl = _controller()
+    jog = JogController(ctrl, step_deg=3.0)
+    before_flex = jog.q["thumb_flex"]
+    assert jog.handle_key("up")
+    after_up = jog.q["thumb_flex"]
+    assert after_up > before_flex
+    assert jog.handle_key("down")
+    assert jog.q["thumb_flex"] < after_up
+    before_rot = jog.q["thumb_rot"]
+    assert jog.handle_key("right")
+    after_right = jog.q["thumb_rot"]
+    assert after_right > before_rot
+    assert jog.handle_key("left")
+    assert jog.q["thumb_rot"] < after_right
+
+
 def test_capture_roundtrip():
     m, ctrl = _controller()
     jog = JogController(ctrl)

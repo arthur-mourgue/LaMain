@@ -20,6 +20,8 @@ def test_calibrate_simulated_writes_json(tmp_path):
     assert code == 0
     data = json.loads((tmp_path / "TEST.json").read_text())
     assert data["hand_serial"] == "TEST"
+    assert data["model_version"] == "lamain-v2-sts3036"
+    assert data["servo_model"] == "STS3036"
     assert len(data["joints"]) == 5
     logs = list(tmp_path.glob("calibration/*_TEST/sweep.csv"))
     assert logs, "expected a segregated calibration sweep log"

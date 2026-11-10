@@ -12,10 +12,48 @@ from pathlib import Path
 import yaml
 
 from . import paths
+from .units import ServoSpec
 
 REFERENCE_STRATEGIES = {"dead_center_midpoint", "hard_stop_min", "hard_stop_max"}
 JOINT_TYPES = {"two_stop", "crank"}
 REFERENCE_SIDES = {"auto", "stop_low", "stop_high", "mount"}
+
+# Defaults for the two servo families this project has used. A model file can
+# override every value under `bus.servo`, so a new servo needs no code change.
+_SERVO_DEFAULTS: dict[str, dict[str, object]] = {
+    "SCS0009": {
+        "controller": "Scs0009PyController",
+        "resolution": 1024,
+        "range_deg": 300.0,
+        "torque_register": "max_torque_limit",
+        "torque_on": 1,
+        "torque_off": 2,
+        "speed_unit": "step",
+        "model_number": 1284,
+    },
+    "STS3036": {
+        "controller": "Sts3215PyController",
+        "resolution": 4096,
+        "range_deg": 360.0,
+        "torque_register": "torque_limit",
+        "torque_on": 1,
+        "torque_off": 0,
+        "speed_unit": "steps_per_s",
+        "acceleration": 50,
+        "model_number": 521,
+    },
+    "STS3215": {
+        "controller": "Sts3215PyController",
+        "resolution": 4096,
+        "range_deg": 360.0,
+        "torque_register": "torque_limit",
+        "torque_on": 1,
+        "torque_off": 0,
+        "speed_unit": "steps_per_s",
+        "acceleration": 50,
+        "model_number": 777,
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -30,6 +68,8 @@ class JointModel:
     max_speed_dps: float
     joint_type: str = "two_stop"
     reference_side: str = "auto"
+    calibration_torque_pct: float | None = None
+    probe_torque_pct: float | None = None
 
     def __post_init__(self) -> None:
         if self.reference not in REFERENCE_STRATEGIES:
@@ -60,6 +100,37 @@ class BusConfig:
     port: str = "/dev/ttyACM0"
     baudrate: int = 1_000_000
     servo_model: str = "SCS0009"
+
+
+def _servo_from_bus(bus_raw: dict) -> ServoSpec:
+    """Build the servo spec from `bus.servo`, with family defaults.
+
+    A model file that only says `servo_model: SCS0009` still loads (the archived
+    SCS design); a new family is described entirely by `bus.servo`.
+    """
+    name = str(bus_raw.get("servo_model", "SCS0009"))
+    raw = dict(_SERVO_DEFAULTS.get(name, {}))
+    raw.update(bus_raw.get("servo") or {})
+    raw.setdefault("model", name)
+    for key in ("controller", "resolution", "range_deg"):
+        if key not in raw:
+            raise ValueError(
+                f"bus.servo.{key} is required for servo_model {name!r}"
+            )
+    acceleration = raw.get("acceleration")
+    model_number = raw.get("model_number")
+    return ServoSpec(
+        model=str(raw["model"]),
+        controller=str(raw["controller"]),
+        resolution=int(raw["resolution"]),
+        range_deg=float(raw["range_deg"]),
+        torque_register=str(raw.get("torque_register", "max_torque_limit")),
+        torque_on=int(raw.get("torque_on", 1)),
+        torque_off=int(raw.get("torque_off", 2)),
+        speed_unit=str(raw.get("speed_unit", "step")),
+        acceleration=None if acceleration is None else int(acceleration),
+        model_number=None if model_number is None else int(model_number),
+    )
 
 
 @dataclass(frozen=True)
@@ -106,6 +177,7 @@ class SafetyConfig:
 class HandModel:
     model_version: str
     bus: BusConfig
+    servo: ServoSpec
     calibration_order: tuple[str, ...]
     calibration: CalibrationConfig
     preconditions: Preconditions
@@ -129,7 +201,7 @@ def _joint_from_dict(name: str, raw: dict) -> JointModel:
     return JointModel(
         name=name,
         servo_id=int(raw["servo_id"]),
-        assembly_position=int(raw.get("assembly_position", 511)),
+        assembly_position=int(raw["assembly_position"]),
         reference=raw.get("reference", "hard_stop_min"),
         branch=raw.get("branch", "positive"),
         range_tolerance_deg=float(raw.get("range_tolerance_deg", 10.0)),
@@ -137,6 +209,16 @@ def _joint_from_dict(name: str, raw: dict) -> JointModel:
         max_speed_dps=float(raw.get("max_speed_dps", 120.0)),
         joint_type=raw.get("type", "two_stop"),
         reference_side=raw.get("reference_side", "auto"),
+        calibration_torque_pct=(
+            None
+            if raw.get("calibration_torque_pct") is None
+            else float(raw["calibration_torque_pct"])
+        ),
+        probe_torque_pct=(
+            None
+            if raw.get("probe_torque_pct") is None
+            else float(raw["probe_torque_pct"])
+        ),
     )
 
 
@@ -151,6 +233,7 @@ def load_hand_model(path: str | Path) -> HandModel:
     if not joints_raw:
         raise ValueError("hand_model.yaml: no joint defined")
 
+    servo = _servo_from_bus(bus_raw)
     joints = {name: _joint_from_dict(name, raw) for name, raw in joints_raw.items()}
 
     order = tuple(data.get("calibration_order") or joints.keys())
@@ -163,8 +246,9 @@ def load_hand_model(path: str | Path) -> HandModel:
         bus=BusConfig(
             port=str(bus_raw.get("port", "/dev/ttyACM0")),
             baudrate=int(bus_raw.get("baudrate", 1_000_000)),
-            servo_model=str(bus_raw.get("servo_model", "SCS0009")),
+            servo_model=servo.model,
         ),
+        servo=servo,
         calibration_order=order,
         calibration=CalibrationConfig(
             step_ticks=int(cal.get("step_ticks", 1)),

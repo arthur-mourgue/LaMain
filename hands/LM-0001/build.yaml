@@ -4,5 +4,5 @@ hardware_revision: revA
 assembled_by: Arthur Mourgue
 cad_by: Julien Navet
 servo:
-  model: SCS0009
+  model: STS3036
   count: 5

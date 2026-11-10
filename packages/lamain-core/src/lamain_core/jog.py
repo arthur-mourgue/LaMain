@@ -19,12 +19,17 @@ DEFAULT_KEYMAP: dict[str, tuple[str, int]] = {
     "1": ("index_flex", +1),
     "2": ("middle_flex", -1),
     "3": ("middle_flex", +1),
-    "4": ("index_middle_abd", -1),
-    "5": ("index_middle_abd", +1),
+    "4": ("abduction", -1),
+    "5": ("abduction", +1),
     "6": ("thumb_rot", -1),
     "7": ("thumb_rot", +1),
     "8": ("thumb_flex", -1),
     "9": ("thumb_flex", +1),
+    # Arrow keys: a dedicated pair for each thumb axis.
+    "up": ("thumb_flex", +1),
+    "down": ("thumb_flex", -1),
+    "left": ("thumb_rot", -1),
+    "right": ("thumb_rot", +1),
 }
 
 DEFAULT_STEP_DEG = 3.0
