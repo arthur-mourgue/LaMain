@@ -6,26 +6,27 @@ An open, low-cost three-finger hand for the SO-101 arm.
   <img src="docs/lamain.gif" alt="LaMain prototype in motion" width="360">
 </p>
 
-**Early prototype under active development.** No tactile sensor is fitted, and no
-dataset or policy exists. Interfaces and hardware will change.
+LaMain is an early prototype: the mechanics and the servo control work, but the tactile
+sensing and the learning stack are still being built. Interfaces and hardware will
+change as they land.
 
 ## Why
 
-Tactile data is scarce. Most hands that can produce it are expensive or closed.
-Learning-based manipulation needs many cheap comparable devices to collect that data.
-LaMain is one. It is a 3D-printed hand that mounts on an SO-101 arm and runs on hobby
-servos. Tactile sensing is the next milestone. The target is a hand under 200 g and
-under 200 EUR.
+Tactile data is scarce, and most hands able to produce it are expensive or closed.
+Learning-based manipulation needs many cheap and comparable devices to collect that
+data. LaMain is meant to be one of them: a 3D-printed hand that mounts on an SO-101 arm
+and runs on hobby servos, for a target cost under 200 EUR and a target mass under 200 g.
 
 ## How it works
 
 Five Feetech STS3036 servos drive `index_flex`, `middle_flex`, `abduction`, `thumb_rot`
-and `thumb_flex` through rigid linkages. Geometry and joint limits live in
-`hand_model.yaml`, the single source of truth for code, calibration and the future URDF.
+and `thumb_flex` through rigid linkages. Their geometry and joint limits live in
+`hand_model.yaml`, which is the single source of truth for the control code, the
+calibration and the URDF that will be generated from it.
 
-All commands pass a safety filter with range, step and torque limits. Calibration
-records joint limits from the hand posed at released torque. Gestures and episodes are
-plain JSON files.
+Every command passes a safety filter that checks joint range, step size and torque
+before it reaches the bus. Calibration records joint limits from the hand posed by hand
+at released torque, and gestures and episodes are stored as plain JSON files.
 
 ```bash
 lamain calibrate      # record joint limits
@@ -33,7 +34,8 @@ lamain studio         # jog, record gestures and episodes
 lamain inspect        # per-joint diagnostic sweep
 ```
 
-Tests run on a simulated bus with a fake clock. No hardware is needed.
+Tests run on a simulated bus with a fake clock, so the whole pipeline works without
+hardware.
 
 ## Status
 
@@ -42,9 +44,9 @@ Tests run on a simulated bus with a fake clock. No hardware is needed.
 | Hardware | revision A, five STS3036 servos, SO-101 mount |
 | Software | bus, calibration, safety filter, controller, studio, episodes |
 | Tests | full suite on `FakeBus`, run in CI |
-| Tactile sensing | not started |
-| LeRobot plugin | not started |
-| Dataset and benchmark | not started |
+| Tactile sensing | planned |
+| LeRobot plugin | planned |
+| Dataset and benchmark | planned |
 
 ## Quickstart
 
@@ -69,20 +71,22 @@ lamain/
 ## Hardware
 
 The bill of materials is in a [shared spreadsheet](https://docs.google.com/spreadsheets/d/1QRkrFNEr4OLIYoRjOxhvR7IqRy3qPOLTq45OjTfyoFY/edit?usp=sharing).
-CAD rev A is not published. The SCS0009 design is kept at the `scs0009-final` tag. The
-switch to STS3036 is recorded in [D-006](docs/decisions/D-006-servo-sts3036.md).
+CAD rev A is not published yet. The earlier SCS0009 design is kept at the `scs0009-final`
+tag, and the switch to the STS3036 is recorded in
+[D-006](docs/decisions/D-006-servo-sts3036.md).
 
 ## Planned
 
-Tactile fingertip pad, URDF generation, LeRobot plugin, then a reproducible benchmark
-against the stock gripper. Open bench tests are in [docs/ROADMAP.md](docs/ROADMAP.md).
+The tactile fingertip pad and the policy integration come next, followed by a URDF
+generator, a LeRobot plugin and a reproducible benchmark against the stock gripper. The
+open bench tests are listed in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## License
 
-Software is Apache-2.0, see [LICENSE](LICENSE). The hardware licence is pending, see
-[D-003](docs/decisions/D-003-licences.md).
+Software is released under Apache-2.0, see [LICENSE](LICENSE). The hardware licence is
+still pending, see [D-003](docs/decisions/D-003-licences.md).
 
 ## Credits
 
-Arthur Mourgue and Julien Navet for the CAD. Inspired by Pollen Robotics'
-[AmazingHand](https://github.com/pollen-robotics/AmazingHand).
+Arthur Mourgue and Julien Navet designed the CAD. The project is inspired by Pollen
+Robotics' [AmazingHand](https://github.com/pollen-robotics/AmazingHand).
