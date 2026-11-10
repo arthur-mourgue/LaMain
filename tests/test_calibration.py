@@ -18,15 +18,15 @@ def test_model_loads_all_joints():
     assert m.servo.acceleration == 50
     assert all(j.assembly_position == m.servo.mid_tick for j in m.joints.values())
     assert m.calibration_order == (
-        "index_middle_abd",
         "index_flex",
         "middle_flex",
+        "index_middle_abd",
         "thumb_rot",
         "thumb_flex",
     )
-    assert m.joint("index_flex").servo_id == 2
-    assert m.joint("middle_flex").servo_id == 3
-    assert m.joint("index_middle_abd").servo_id == 1
+    assert m.joint("index_flex").servo_id == 1
+    assert m.joint("middle_flex").servo_id == 2
+    assert m.joint("index_middle_abd").servo_id == 3
     assert m.joint("thumb_rot").servo_id == 4
     assert m.joint("thumb_flex").servo_id == 5
     assert m.joint("index_flex").is_crank
