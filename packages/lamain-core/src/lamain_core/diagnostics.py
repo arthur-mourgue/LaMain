@@ -117,6 +117,7 @@ def _move_to(
         max_step=max(50, servo.resolution // 12),
         timeout_s=8.0,
         settle_s=settle_s,
+        tolerance=units.settle_tolerance(servo),
     )
 
 

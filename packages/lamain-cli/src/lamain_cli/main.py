@@ -74,11 +74,6 @@ def _move_timeout(model, minimum: float = 3.0) -> float:
     return minimum
 
 
-def _settle_tolerance(model) -> int:
-    """2 ticks at SCS resolution, scaled to the servo."""
-    return max(2, round(2 * model.servo.resolution / 1024))
-
-
 def _model(args):
     return load_hand_model(getattr(args, "model", None) or default_model_path())
 
@@ -247,7 +242,7 @@ def cmd_assemble(args) -> int:
                 timeout_s=deadline,
             )
 
-        tol = _settle_tolerance(model)
+        tol = units.settle_tolerance(model.servo)
         reached = {
             j.servo_id: bus.read_position(j.servo_id) for j in model.joints.values()
         }
@@ -399,6 +394,9 @@ def cmd_calibrate(args) -> int:
         return 0 if hand.valid else 2
     except CalibrationAbort as exc:
         print(f"\nABORT: {exc}")
+        sweep = run_dir / "sweep.csv"
+        if sweep.exists():
+            print(f"Partial sweep log: {sweep}")
         return 1
     except KeyboardInterrupt:
         print("\nCtrl-C: torque off.")

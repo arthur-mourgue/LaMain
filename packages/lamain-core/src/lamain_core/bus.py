@@ -369,22 +369,42 @@ def move_to(
     max_step: int,
     timeout_s: float,
     settle_s: float = 0.02,
+    stall_reads: int = 20,
+    tolerance: int = 1,
 ) -> bool:
     """Step the goal towards `target`; return True when reached.
 
     The STS3036 ignores a direct goal jump larger than about 1000 ticks (the
     servo simply does not move). Every caller must therefore ramp the goal in
     `max_step` increments instead of writing the final position once.
+
+    `tolerance` is how close counts as arrived: the position loop has a few
+    ticks of deadband, so demanding 1 tick reports a healthy joint as stuck.
+
+    Give up after `stall_reads` reads without getting closer, instead of
+    pushing at the torque limit until `timeout_s`: a blocked joint must not
+    cook the servo.
     """
     deadline = time.monotonic() + timeout_s
     max_step = max(1, int(max_step))
+    tolerance = max(0, int(tolerance))
+    best = None
+    no_progress = 0
     while time.monotonic() < deadline:
         current = bus.read_position(servo_id)
-        if abs(current - target) <= 1:
+        remaining = abs(current - target)
+        if remaining <= tolerance:
             return True
         step = max(-max_step, min(max_step, target - current))
         bus.write_goal(servo_id, current + step)
         bus.step()
         if not bus.simulated:
             time.sleep(settle_s)
+        if best is None or remaining < best:
+            best = remaining
+            no_progress = 0
+        else:
+            no_progress += 1
+            if no_progress >= stall_reads:
+                return False
     return False

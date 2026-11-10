@@ -92,5 +92,15 @@ def deg_to_ticks(deg: float, servo: ServoSpec) -> int:
     return int(round(deg * servo.ticks_per_deg))
 
 
+def settle_tolerance(servo: ServoSpec) -> int:
+    """Ticks a servo may sit from its goal and still count as arrived.
+
+    The position loop has a deadband: on the bench a joint settles 2 ticks
+    short of the goal at STS resolution. 2 ticks at the SCS0009 resolution,
+    scaled to the servo.
+    """
+    return max(2, round(2 * servo.resolution / 1024))
+
+
 def ticks_to_deg(ticks: float, servo: ServoSpec) -> float:
     return ticks * servo.deg_per_tick

@@ -24,6 +24,7 @@ import csv
 import statistics
 import time
 from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
 from . import units
@@ -113,7 +114,7 @@ def _sleep(bus: ServoBus, model: HandModel) -> None:
 
 
 def _move_to(bus: ServoBus, model: HandModel, servo_id: int, target: int) -> bool:
-    """Move to `target`; return True if reached (within 1 tick)."""
+    """Move to `target`; return True when the servo is within its deadband."""
     target = max(model.servo.tick_min, min(model.servo.tick_max, target))
     return move_to(
         bus,
@@ -121,6 +122,8 @@ def _move_to(bus: ServoBus, model: HandModel, servo_id: int, target: int) -> boo
         target,
         max_step=max(50, model.servo.resolution // 12),
         timeout_s=12.0,
+        settle_s=model.calibration.settle_s,
+        tolerance=units.settle_tolerance(model.servo),
     )
 
 
@@ -219,7 +222,14 @@ def _approach(
     cfg = model.calibration
     sid = joint.servo_id
     servo = model.servo
-    max_iters = (servo.tick_max - servo.tick_min) // max(1, step) + 200
+    # Read budget: a joint with no stop must be able to cross the whole servo
+    # travel before we give up. The position can only advance by
+    # move_speed * settle_s per read (bus time only makes it slower), so a
+    # budget based on the step alone aborts a free joint long before its end.
+    ticks_per_read = max(1.0, model.safety.move_speed * cfg.settle_s)
+    max_iters = (
+        int((servo.tick_max - servo.tick_min) / min(step, ticks_per_read)) + 200
+    )
     goal = bus.read_position(sid)
     # Net-progress stall detection: robust to position jitter. We track the
     # furthest position reached; if it stops improving for `stable_reads` reads
@@ -238,7 +248,7 @@ def _approach(
 
         goal = max(servo.tick_min, min(servo.tick_max, goal + direction * step))
         bus.write_goal(sid, goal)
-        pos, load = _read(bus, model, sid, goal, log)
+        pos, _ = _read(bus, model, sid, goal, log)
 
         if direction < 0:
             improved = pos < best - cfg.stable_epsilon_ticks
@@ -269,14 +279,17 @@ def _approach(
             _confirm_stop(bus, joint, model, direction, pos, log, trace)
             return StopResult(pos, True, [pos])
         if stalled:
-            # At the command boundary we cannot push further: accept the stop.
-            if goal_limit or _confirm_stop(bus, joint, model, direction, pos, log, trace):
+            # Always confirm with a real torque push, including when the
+            # command is already clamped at the servo boundary: a position
+            # that pauses while the goal is clamped is not proof of a stop.
+            if _confirm_stop(bus, joint, model, direction, pos, log, trace):
                 return StopResult(pos, False, [pos])
             best = pos  # friction slipped: restart the progress window
             no_progress = 0
 
     raise CalibrationAbort(
-        f"servo {sid}: no stop found in {direction:+d} (travel exceeded)"
+        f"servo {sid}: no stop found in {direction:+d} after {max_iters} reads "
+        f"(travel exceeded)"
     )
 
 
@@ -538,7 +551,11 @@ def calibrate_joint(
         end_margin=cfg.servo_end_margin_ticks,
         tick_max=model.servo.tick_max,
     )
-    _move_to(bus, model, sid, mount)  # return to the ASSEMBLY zero
+    if not _move_to(bus, model, sid, mount):  # back to the ASSEMBLY zero
+        raise CalibrationAbort(
+            f"servo {sid} ({joint.name}): cannot return to the assembly zero "
+            f"{mount} (stuck at {bus.read_position(sid)})"
+        )
     return cal
 
 
@@ -583,12 +600,28 @@ def _prepare_all(bus: ServoBus, model: HandModel) -> dict[str, int]:
     for j in model.joints.values():
         bus.set_torque_limit_pct(j.servo_id, model.calibration.torque_pct)
         bus.set_goal_speed(j.servo_id, model.safety.move_speed)
-        # Write the assembly goal before enabling torque, so a stale goal can
-        # never move the joint during the reset.
-        bus.write_goal(j.servo_id, j.assembly_position)
+        # Hold the CURRENT pose before enabling torque, then ramp to the
+        # assembly zero. The STS3036 ignores a goal more than ~1000 ticks away:
+        # writing the assembly zero directly (e.g. 818 -> 2048 = 1230 ticks)
+        # leaves the joint stuck there and every later ramp goal is ignored
+        # too. `_home_all` and `calibrate_joint` already do it this way.
+        bus.write_goal(j.servo_id, bus.read_position(j.servo_id))
         bus.set_torque_enable(j.servo_id, True)
-        _move_to(bus, model, j.servo_id, j.assembly_position)
-        positions[j.name] = bus.read_position(j.servo_id)
+        reached = _move_to(bus, model, j.servo_id, j.assembly_position)
+        position = bus.read_position(j.servo_id)
+        if not reached:
+            # Never calibrate from a wrong zero: the whole run would be off,
+            # and pushing a blocked joint is what overheats the servo.
+            load = bus.read_load(j.servo_id)
+            volt = bus.read_voltage(j.servo_id)
+            raise CalibrationAbort(
+                f"servo {j.servo_id} ({j.name}): assembly zero "
+                f"{j.assembly_position} unreachable (stuck at {position}, "
+                f"load {load}/1000, {volt:.1f} V at "
+                f"{model.calibration.torque_pct:.0f} % torque); "
+                "free the joint, then retry"
+            )
+        positions[j.name] = position
     return positions
 
 
@@ -639,17 +672,16 @@ def calibrate_hand(
                 bus.set_torque_enable(j.servo_id, False)
             except Exception:
                 pass
-
-    if logs_dir is not None:
-        log.write_csv(Path(logs_dir) / "sweep.csv")
-
-    from datetime import datetime, timezone
+        if logs_dir is not None:
+            # Keep the sweep even when the calibration aborts: it is the only
+            # record of what the joint actually did on the bench.
+            log.write_csv(Path(logs_dir) / "sweep.csv")
 
     return HandCalibration(
         hand_serial=hand_serial,
         model_version=model.model_version,
         servo_model=model.servo.model,
         joints=results,
-        created_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        created_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         log_path=str(Path(logs_dir) / "sweep.csv") if logs_dir else "",
     )

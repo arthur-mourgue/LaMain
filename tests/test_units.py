@@ -2,6 +2,7 @@ from lamain_core.units import (
     ServoSpec,
     deg_to_ticks,
     rad_to_ticks,
+    settle_tolerance,
     ticks_to_deg,
     ticks_to_rad,
 )
@@ -50,3 +51,9 @@ def test_rad_matches_ticks_on_both_families():
 def test_full_turn_maps_to_the_servo_resolution():
     assert deg_to_ticks(SCS.range_deg, SCS) == SCS.resolution
     assert deg_to_ticks(STS.range_deg, STS) == STS.resolution
+
+
+def test_settle_tolerance_scales_with_the_servo():
+    # 2 ticks at SCS resolution: the position loop deadband, scaled up.
+    assert settle_tolerance(SCS) == 2
+    assert settle_tolerance(STS) == 8

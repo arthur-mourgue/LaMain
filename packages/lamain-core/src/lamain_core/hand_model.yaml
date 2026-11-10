@@ -34,7 +34,11 @@ calibration_order: [abduction, index_flex, middle_flex, thumb_rot, thumb_flex]
 calibration:
   # Tick values are scaled from the SCS0009 design (x4): 8 ticks ~= 0.70 deg.
   step_ticks: 8               # slow-approach step
-  fast_step_ticks: 32         # fast-approach step (locating)
+  # Fast-approach step: keep it at move_speed * settle_s (500 * 0.02 = 10) so
+  # the goal never outruns the servo (~10 ticks per read). Larger values make
+  # the goal run thousands of ticks ahead of the joint and turn the read budget
+  # and the push force at a stop into arbitrary numbers.
+  fast_step_ticks: 10         # fast-approach step (locating)
   stable_reads: 10            # N stable reads before suspecting a stop
   stable_epsilon_ticks: 12    # max variation allowed for "stable"
   overrun_ticks: 80           # the command must lead the position by this much
